@@ -2,8 +2,8 @@ from abc import abstractmethod
 from functools import cached_property
 from hashlib import sha1
 import json
-from typing import TYPE_CHECKING, Any, ClassVar, Dict, Generic, TypeVar
-from pydantic import BaseModel, Field
+from typing import TYPE_CHECKING, Annotated, Any, ClassVar, Dict, Generic, Type, TypeVar
+from pydantic import BaseModel, BeforeValidator, Field, PlainSerializer, WithJsonSchema
 
 from typing_extensions import TypeAlias, Union, List
 
@@ -22,6 +22,26 @@ AssetStruct: TypeAlias = Union["Asset", List["AssetStruct"], Dict[str, "AssetStr
 AssetDeps: TypeAlias = Union[
     None, "Asset", List["Asset"], Dict[str, "Asset"], Dict[str, List["Asset"]]
 ]
+
+
+class _Register:
+
+    def __init__(self):
+        self._family_to_class: dict[str, Type["Asset"]] = {}
+
+    def add(self, asset_class: Type["Asset"]):
+        # TODO support luigi style namespacing
+        if self._family_to_class.get(asset_class.family_name()):
+            raise ValueError(
+                f"Asset family name {asset_class.family_name()} already registered."
+            )
+        self._family_to_class[asset_class.family_name()] = asset_class
+
+    def get(self, family_name: str) -> Type["Asset"]:
+        return self._family_to_class[family_name]
+
+
+_REGISTER = _Register()
 
 
 class AssetIDRef(BaseModel):
@@ -44,8 +64,8 @@ class Asset(BaseModel, Generic[LoadedT, TargetT]):
 
     @classmethod
     def __pydantic_init_subclass__(cls, **kwargs: Any) -> None:
-        # TODO register class?
         super().__pydantic_init_subclass__(**kwargs)
+        _REGISTER.add(cls)
         cls._param_configs = {
             name: (
                 field_info.json_schema_extra.init(
@@ -79,7 +99,7 @@ class Asset(BaseModel, Generic[LoadedT, TargetT]):
         return get_str_hash(self._id_hash_json())
 
     @property
-    def id_ref(self) -> str:
+    def id_ref(self) -> AssetIDRef:
         return AssetIDRef(
             family_name=self.family_name(),
             version=self.version,
@@ -104,6 +124,44 @@ class Asset(BaseModel, Generic[LoadedT, TargetT]):
 
     def _id_hash_json(self) -> str:
         return _hash_safe_json_dumps(self._id_hash_jsonable())
+
+
+_ASSET_FAMILY_KEY = "__family_name"
+
+
+def _asset_param_validate(x: Any) -> Asset:
+    if not isinstance(x, dict):
+        return x
+    if _ASSET_FAMILY_KEY not in x:
+        raise ValueError(f"Asset parameter dict must have a '{_ASSET_FAMILY_KEY}' key.")
+
+    return _REGISTER.get(x[_ASSET_FAMILY_KEY])(
+        **{key: value for key, value in x.items() if key != _ASSET_FAMILY_KEY}
+    )
+
+
+# LoadedT_ = TypeVar("LoadedT_", bound=Any, covariant=True)
+# TargetT_ = TypeVar("TargetT_", bound=Any, covariant=True)
+
+# _AssetT = TypeVar("_AssetT", bound=Asset[LoadedT_, TargetT_])
+
+_AssetT = TypeVar("_AssetT", bound=Asset)
+
+AssetParam = Annotated[
+    _AssetT,
+    BeforeValidator(_asset_param_validate),
+    PlainSerializer(lambda x: {**x.model_dump(), _ASSET_FAMILY_KEY: x.family_name()}),
+    WithJsonSchema(
+        {
+            "type": "object",
+            "properties": {
+                _ASSET_FAMILY_KEY: {"type": "string"},
+            },
+            "additionalProperties": True,
+        },
+        mode="serialization",
+    ),
+]
 
 
 def _hash_safe_json_dumps(obj):
