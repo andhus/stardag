@@ -55,6 +55,7 @@ class IDHasher(IDHasherABC[ParameterT]):
         return self
 
     def __call__(self, value: ParameterT) -> JsonValue:
+        # TODO except for Assets! use id_hash...
         return self.type_adapter.dump_python(value, mode="json")
 
     @property

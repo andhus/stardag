@@ -74,6 +74,24 @@ class Asset(BaseModel, Generic[LoadedT, TargetT]):
     def family_name(cls) -> str:
         return cls.__name__
 
+    @cached_property
+    def id_hash(self) -> str:
+        return get_str_hash(self._id_hash_json())
+
+    @property
+    def id_ref(self) -> str:
+        return AssetIDRef(
+            family_name=self.family_name(),
+            version=self.version,
+            id_hash=self.id_hash,
+        )
+
+    def run_version_checked(self):
+        if not self.version == self.__version__:
+            raise ValueError("TODO")
+
+        self.run()
+
     def _id_hash_jsonable(self) -> dict:
         return {
             "family_name": self.family_name(),
@@ -86,18 +104,6 @@ class Asset(BaseModel, Generic[LoadedT, TargetT]):
 
     def _id_hash_json(self) -> str:
         return _hash_safe_json_dumps(self._id_hash_jsonable())
-
-    @cached_property
-    def id_hash(self) -> str:
-        return get_str_hash(self._id_hash_json())
-
-    @property
-    def id_ref(self) -> str:
-        return AssetIDRef(
-            family_name=self.family_name(),
-            version=self.version,
-            id_hash=self.id_hash,
-        )
 
 
 def _hash_safe_json_dumps(obj):
