@@ -2,7 +2,17 @@ from abc import abstractmethod
 from functools import cached_property
 from hashlib import sha1
 import json
-from typing import TYPE_CHECKING, Annotated, Any, ClassVar, Dict, Generic, Type, TypeVar
+from typing import (
+    TYPE_CHECKING,
+    Annotated,
+    Any,
+    ClassVar,
+    Dict,
+    Generic,
+    Type,
+    TypeVar,
+    get_origin,
+)
 from pydantic import (
     BaseModel,
     BeforeValidator,
@@ -19,8 +29,8 @@ from typing_extensions import TypeAlias, Union, List
 from dcdag.core.parameter import _ParameterConfig
 
 
-LoadedT = TypeVar("LoadedT")
-TargetT = TypeVar("TargetT")
+LoadedT = TypeVar("LoadedT", covariant=True)
+TargetT = TypeVar("TargetT", covariant=True)
 
 AssetStruct: TypeAlias = Union["Asset", List["AssetStruct"], Dict[str, "AssetStruct"]]
 
@@ -138,31 +148,62 @@ class Asset(BaseModel, Generic[LoadedT, TargetT]):
 _ASSET_FAMILY_KEY = "__family_name"
 
 
-def _asset_param_validate(
-    x: Any,
-    handler: ValidatorFunctionWrapHandler,
-    info: ValidationInfo,
-) -> Asset:
-    if isinstance(x, dict):
-        if _ASSET_FAMILY_KEY not in x:
-            raise ValueError(
-                f"Asset parameter dict must have a '{_ASSET_FAMILY_KEY}' key."
+def _get_asset_param_validate(annotation):
+    def _asset_param_validate(
+        x: Any,
+        handler: ValidatorFunctionWrapHandler,
+        info: ValidationInfo,
+    ) -> Asset:
+        if isinstance(x, dict):
+            if _ASSET_FAMILY_KEY not in x:
+                raise ValueError(
+                    f"Asset parameter dict must have a '{_ASSET_FAMILY_KEY}' key."
+                )
+
+            instance = _REGISTER.get(x[_ASSET_FAMILY_KEY])(
+                **{key: value for key, value in x.items() if key != _ASSET_FAMILY_KEY}
             )
+        elif isinstance(x, Asset):
+            instance = x
+        else:
+            raise ValueError(f"Invalid asset parameter type: {type(x)}")
 
-        instance = _REGISTER.get(x[_ASSET_FAMILY_KEY])(
-            **{key: value for key, value in x.items() if key != _ASSET_FAMILY_KEY}
-        )
-    elif isinstance(x, Asset):
-        instance = x
-    else:
-        raise ValueError(f"Invalid asset parameter type: {type(x)}")
+        try:
+            return handler(instance)
+        except ValidationError as e:
+            # print(
+            #     f"Error in asset parameter validation: {e}, {info}"
+            #     f"\nAnnotation: {annotation}"
+            # )
+            # check that the annotation is correct
+            if not isinstance(instance, Asset):
+                raise ValueError(
+                    f"Asset parameter must be of type {Asset}, got {type(instance)}."
+                )
 
-    try:
-        return handler(instance)
-    except ValidationError as e:
-        print(f"Error in asset parameter validation: {e}, {info}")
+        meta: dict = annotation.__pydantic_generic_metadata__
+        origin = meta.get("origin")
+        if not origin == Asset:
+            raise ValueError(f"Asset parameter must be of type {Asset}, got {origin}.")
 
-    return instance
+        load_t, target_t = meta.get("args")
+
+        if not load_t is Any:
+            if not instance.load.__annotations__["return"] == load_t:
+                raise ValueError(
+                    f"Asset parameter load method must return {load_t}, got "
+                    f"{instance.load.__annotations__['return']}."
+                )
+        if not target_t is Any:
+            if not instance.target.__annotations__["return"] == target_t:
+                raise ValueError(
+                    f"Asset parameter target method must return {target_t}, got "
+                    f"{instance.target.__annotations__['return']}."
+                )
+
+        return instance
+
+    return _asset_param_validate
 
 
 # LoadedT_ = TypeVar("LoadedT_", bound=Any, covariant=True)
@@ -172,9 +213,9 @@ def _asset_param_validate(
 
 _AssetT = TypeVar("_AssetT", bound=Asset)
 
-AssetParam = Annotated[
+_AssetParam = Annotated[
     _AssetT,
-    WrapValidator(_asset_param_validate),
+    # WrapValidator(_asset_param_validate),
     PlainSerializer(lambda x: {**x.model_dump(), _ASSET_FAMILY_KEY: x.family_name()}),
     WithJsonSchema(
         {
@@ -187,6 +228,29 @@ AssetParam = Annotated[
         mode="serialization",
     ),
 ]
+
+
+# TODO add "if TYPE_CHECKING"...
+# See: https://github.com/pydantic/pydantic/issues/8202#issuecomment-2264669699
+class AssetParam:
+    def __class_getitem__(cls, item):
+        return Annotated[
+            item,
+            WrapValidator(_get_asset_param_validate(item)),
+            PlainSerializer(
+                lambda x: {**x.model_dump(), _ASSET_FAMILY_KEY: x.family_name()}
+            ),
+            WithJsonSchema(
+                {
+                    "type": "object",
+                    "properties": {
+                        _ASSET_FAMILY_KEY: {"type": "string"},
+                    },
+                    "additionalProperties": True,
+                },
+                mode="serialization",
+            ),
+        ]
 
 
 def _hash_safe_json_dumps(obj):

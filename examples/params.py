@@ -34,6 +34,7 @@ class MyAsset(Asset[str, None]):
     )
     model: TestModel = TestModel()
     sub_asset: AssetParam[Asset[int, Any]]
+    sub_asset_2: AssetParam[SubAsset]
 
     def load(self) -> str:
         return f"{self.a}, {self.b}"
@@ -46,7 +47,12 @@ class MyAsset(Asset[str, None]):
 
 
 if __name__ == "__main__":
-    my_asset = MyAsset(a=1, b="b", sub_asset=SubAsset(param=1))
+    my_asset = MyAsset(
+        a=1,
+        b="b",
+        sub_asset=SubAsset(param=1),
+        sub_asset_2=SubAsset(param=2),
+    )
     print(json.dumps(my_asset._id_hash_jsonable(), indent=2))
     print(my_asset.id_hash)
     print(my_asset.id_ref)
