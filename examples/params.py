@@ -33,7 +33,7 @@ class MyAsset(Asset[str, None]):
         # id_hash_include=lambda x: x != "C",
     )
     model: TestModel = TestModel()
-    sub_asset: AssetParam[Asset[int, None]]
+    sub_asset: AssetParam[Asset[int, Any]]
 
     def load(self) -> str:
         return f"{self.a}, {self.b}"

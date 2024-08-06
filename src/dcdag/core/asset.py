@@ -3,8 +3,17 @@ from functools import cached_property
 from hashlib import sha1
 import json
 from typing import TYPE_CHECKING, Annotated, Any, ClassVar, Dict, Generic, Type, TypeVar
-from pydantic import BaseModel, BeforeValidator, Field, PlainSerializer, WithJsonSchema
-
+from pydantic import (
+    BaseModel,
+    BeforeValidator,
+    Field,
+    PlainSerializer,
+    WithJsonSchema,
+    ValidationInfo,
+    ValidationError,
+    ValidatorFunctionWrapHandler,
+    WrapValidator,
+)
 from typing_extensions import TypeAlias, Union, List
 
 from dcdag.core.parameter import _ParameterConfig
@@ -129,15 +138,31 @@ class Asset(BaseModel, Generic[LoadedT, TargetT]):
 _ASSET_FAMILY_KEY = "__family_name"
 
 
-def _asset_param_validate(x: Any) -> Asset:
-    if not isinstance(x, dict):
-        return x
-    if _ASSET_FAMILY_KEY not in x:
-        raise ValueError(f"Asset parameter dict must have a '{_ASSET_FAMILY_KEY}' key.")
+def _asset_param_validate(
+    x: Any,
+    handler: ValidatorFunctionWrapHandler,
+    info: ValidationInfo,
+) -> Asset:
+    if isinstance(x, dict):
+        if _ASSET_FAMILY_KEY not in x:
+            raise ValueError(
+                f"Asset parameter dict must have a '{_ASSET_FAMILY_KEY}' key."
+            )
 
-    return _REGISTER.get(x[_ASSET_FAMILY_KEY])(
-        **{key: value for key, value in x.items() if key != _ASSET_FAMILY_KEY}
-    )
+        instance = _REGISTER.get(x[_ASSET_FAMILY_KEY])(
+            **{key: value for key, value in x.items() if key != _ASSET_FAMILY_KEY}
+        )
+    elif isinstance(x, Asset):
+        instance = x
+    else:
+        raise ValueError(f"Invalid asset parameter type: {type(x)}")
+
+    try:
+        return handler(instance)
+    except ValidationError as e:
+        print(f"Error in asset parameter validation: {e}, {info}")
+
+    return instance
 
 
 # LoadedT_ = TypeVar("LoadedT_", bound=Any, covariant=True)
@@ -149,7 +174,7 @@ _AssetT = TypeVar("_AssetT", bound=Asset)
 
 AssetParam = Annotated[
     _AssetT,
-    BeforeValidator(_asset_param_validate),
+    WrapValidator(_asset_param_validate),
     PlainSerializer(lambda x: {**x.model_dump(), _ASSET_FAMILY_KEY: x.family_name()}),
     WithJsonSchema(
         {
