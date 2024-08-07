@@ -60,11 +60,10 @@ class AssetIDRef(BaseModel):
 class Asset(BaseModel, Generic[LoadedT, TargetT]):
     __version__: ClassVar[str | None] = None
 
-    version: str | None = Field(None, description="Version of the task code.")
+    version: str | None = Field(default=None, description="Version of the task code.")
 
     if TYPE_CHECKING:
-        _param_configs: Dict[str, _ParameterConfig]
-
+        _param_configs: ClassVar[Dict[str, _ParameterConfig]] = {}
     else:
         _param_configs = {}
 

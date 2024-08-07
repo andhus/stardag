@@ -2,7 +2,7 @@ import json
 from typing import Any
 
 from pydantic import BaseModel
-from pytest import param
+
 from dcdag.core.asset import Asset, AssetParam
 from dcdag.core.parameter import ParamField
 
