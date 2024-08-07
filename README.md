@@ -6,7 +6,7 @@ Why? Luigi was extremely powerful in its simplicity. Most modern frameworks make
 
 Assets at the core
 
-Why Named Asset and Not Task: A class is typically named after what _an instance_ of it is. A task it what maps a set of inputs. Prefect correctly uses the term  `task`: an instance returns assets when called on inputs.
+Why Named Asset and Not Task: A class is typically named after what _an instance_ of it is. A task it what maps a set of inputs. Prefect correctly uses the term `task`: an instance returns assets when called on inputs.
 
 Where luigi came short:
 

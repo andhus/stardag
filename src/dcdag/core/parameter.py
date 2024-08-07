@@ -1,43 +1,18 @@
 from __future__ import annotations
 
-from abc import abstractmethod
-import datetime
-import inspect
-import json
 import typing
-from enum import Enum
-from numbers import Number
-from types import NoneType, UnionType
-from typing import (
-    Annotated,
-    Any,
-    Callable,
-    Generic,
-    Hashable,
-    Iterable,
-    Literal,
-    MutableMapping,
-    MutableSequence,
-    MutableSet,
-    Self,
-    Type,
-    TypeVar,
-    Union,
-    get_args,
-    get_origin,
-)
-from uuid import UUID
+from abc import abstractmethod
+from types import NoneType
+from typing import Any, Callable, Generic, Self, Type, TypeVar
 
-from pydantic import BaseModel, Field, TypeAdapter, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 from pydantic.config import JsonDict, JsonValue
-from pydantic_core import PydanticUndefined, PydanticUndefinedType
-
+from pydantic_core import PydanticUndefined
 
 ParameterT = TypeVar("ParameterT")
 
 
 class IDHasherABC(Generic[ParameterT]):
-
     def init(self, annotation: type[Any] | None) -> Self:
         return self
 
@@ -46,9 +21,8 @@ class IDHasherABC(Generic[ParameterT]):
 
 
 class IDHasher(IDHasherABC[ParameterT]):
-
     def __init__(self) -> NoneType:
-        self._type_adapter: TypeAdapter = PydanticUndefined
+        self._type_adapter: TypeAdapter | None = None
 
     def init(self, annotation: Type[Any] | NoneType) -> Self:
         self._type_adapter = TypeAdapter(annotation)
@@ -64,7 +38,7 @@ class IDHasher(IDHasherABC[ParameterT]):
 
     @property
     def type_adapter(self) -> TypeAdapter:
-        if self._type_adapter is PydanticUndefined:
+        if self._type_adapter is None:
             raise ValueError("The init method has not been called.")
 
         return self._type_adapter
@@ -108,7 +82,7 @@ def ParamField(  # noqa: C901
     default_factory: typing.Callable[[], ParameterT] | None = None,
     significant: bool = True,
     id_hash_include: Callable[[ParameterT], bool] = _always_include,
-    id_hasher: Callable[[ParameterT], JsonValue] = PydanticUndefined,
+    id_hasher: Callable[[ParameterT], JsonValue] | None = None,
     **kwargs: Any,  # TODO typing?
 ) -> Any:
     """TODO: docstring
@@ -125,7 +99,7 @@ def ParamField(  # noqa: C901
         default_factory=default_factory,
         json_schema_extra=_ParameterConfig(
             id_hash_include=id_hash_include if significant else _always_exclude,
-            id_hasher=IDHasher() if id_hasher is PydanticUndefined else id_hasher,
+            id_hasher=IDHasher() if id_hasher is None else id_hasher,
         ),
         **kwargs,
     )
