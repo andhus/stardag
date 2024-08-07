@@ -55,7 +55,11 @@ class IDHasher(IDHasherABC[ParameterT]):
         return self
 
     def __call__(self, value: ParameterT) -> JsonValue:
-        # TODO except for Assets! use id_hash...
+        from dcdag.core.asset import Asset
+
+        if isinstance(value, Asset):
+            return value.id_ref.model_dump(mode="json")
+
         return self.type_adapter.dump_python(value, mode="json")
 
     @property

@@ -2,16 +2,35 @@ from abc import abstractmethod
 from functools import cached_property
 from hashlib import sha1
 import json
-from typing import TYPE_CHECKING, Any, ClassVar, Dict, Generic, TypeVar
-from pydantic import BaseModel, Field
-
+from typing import (
+    TYPE_CHECKING,
+    Annotated,
+    Any,
+    ClassVar,
+    Dict,
+    Generic,
+    Type,
+    TypeVar,
+    get_origin,
+)
+from pydantic import (
+    BaseModel,
+    BeforeValidator,
+    Field,
+    PlainSerializer,
+    WithJsonSchema,
+    ValidationInfo,
+    ValidationError,
+    ValidatorFunctionWrapHandler,
+    WrapValidator,
+)
 from typing_extensions import TypeAlias, Union, List
 
 from dcdag.core.parameter import _ParameterConfig
 
 
-LoadedT = TypeVar("LoadedT")
-TargetT = TypeVar("TargetT")
+LoadedT = TypeVar("LoadedT", covariant=True)
+TargetT = TypeVar("TargetT", covariant=True)
 
 AssetStruct: TypeAlias = Union["Asset", List["AssetStruct"], Dict[str, "AssetStruct"]]
 
@@ -22,6 +41,26 @@ AssetStruct: TypeAlias = Union["Asset", List["AssetStruct"], Dict[str, "AssetStr
 AssetDeps: TypeAlias = Union[
     None, "Asset", List["Asset"], Dict[str, "Asset"], Dict[str, List["Asset"]]
 ]
+
+
+class _Register:
+
+    def __init__(self):
+        self._family_to_class: dict[str, Type["Asset"]] = {}
+
+    def add(self, asset_class: Type["Asset"]):
+        # TODO support luigi style namespacing
+        if self._family_to_class.get(asset_class.family_name()):
+            raise ValueError(
+                f"Asset family name {asset_class.family_name()} already registered."
+            )
+        self._family_to_class[asset_class.family_name()] = asset_class
+
+    def get(self, family_name: str) -> Type["Asset"]:
+        return self._family_to_class[family_name]
+
+
+_REGISTER = _Register()
 
 
 class AssetIDRef(BaseModel):
@@ -44,8 +83,8 @@ class Asset(BaseModel, Generic[LoadedT, TargetT]):
 
     @classmethod
     def __pydantic_init_subclass__(cls, **kwargs: Any) -> None:
-        # TODO register class?
         super().__pydantic_init_subclass__(**kwargs)
+        _REGISTER.add(cls)
         cls._param_configs = {
             name: (
                 field_info.json_schema_extra.init(
@@ -79,7 +118,7 @@ class Asset(BaseModel, Generic[LoadedT, TargetT]):
         return get_str_hash(self._id_hash_json())
 
     @property
-    def id_ref(self) -> str:
+    def id_ref(self) -> AssetIDRef:
         return AssetIDRef(
             family_name=self.family_name(),
             version=self.version,
@@ -104,6 +143,100 @@ class Asset(BaseModel, Generic[LoadedT, TargetT]):
 
     def _id_hash_json(self) -> str:
         return _hash_safe_json_dumps(self._id_hash_jsonable())
+
+
+_ASSET_FAMILY_KEY = "__family_name"
+
+
+def _get_asset_param_validate(annotation):
+    def _asset_param_validate(
+        x: Any,
+        handler: ValidatorFunctionWrapHandler,
+        info: ValidationInfo,
+    ) -> Asset:
+        if isinstance(x, dict):
+            if _ASSET_FAMILY_KEY not in x:
+                raise ValueError(
+                    f"Asset parameter dict must have a '{_ASSET_FAMILY_KEY}' key."
+                )
+
+            instance = _REGISTER.get(x[_ASSET_FAMILY_KEY])(
+                **{key: value for key, value in x.items() if key != _ASSET_FAMILY_KEY}
+            )
+        elif isinstance(x, Asset):
+            instance = x
+        else:
+            raise ValueError(f"Invalid asset parameter type: {type(x)}")
+
+        try:
+            return handler(instance)
+        except ValidationError as e:
+            # print(
+            #     f"Error in asset parameter validation: {e}"
+            #     f"\nAnnotation: {annotation}"
+            # )
+            # check that the annotation is correct
+            if not isinstance(instance, Asset):
+                raise ValueError(
+                    f"Asset parameter must be of type {Asset}, got {type(instance)}."
+                )
+
+            meta: dict = annotation.__pydantic_generic_metadata__
+            origin = meta.get("origin")
+            if not origin == Asset:  # TODO subclass check?
+                raise ValueError(
+                    f"Asset parameter must be of type {Asset}, got {origin}."
+                )
+
+            load_t, target_t = meta.get("args")
+
+            if not load_t is Any:
+                if not instance.load.__annotations__["return"] == load_t:
+                    raise ValueError(
+                        f"Asset parameter load method must return {load_t}, got "
+                        f"{instance.load.__annotations__['return']}."
+                    )
+            if not target_t is Any:
+                if not instance.target.__annotations__["return"] == target_t:
+                    raise ValueError(
+                        f"Asset parameter target method must return {target_t}, got "
+                        f"{instance.target.__annotations__['return']}."
+                    )
+
+        return instance
+
+    return _asset_param_validate
+
+
+_AssetT = TypeVar("_AssetT", bound=Asset)
+
+
+# See: https://github.com/pydantic/pydantic/issues/8202#issuecomment-2264669699
+class _AssetParam:
+    def __class_getitem__(cls, item):
+        return Annotated[
+            item,
+            WrapValidator(_get_asset_param_validate(item)),
+            PlainSerializer(
+                lambda x: {**x.model_dump(), _ASSET_FAMILY_KEY: x.family_name()}
+            ),
+            WithJsonSchema(
+                {
+                    "type": "object",
+                    "properties": {
+                        _ASSET_FAMILY_KEY: {"type": "string"},
+                    },
+                    "additionalProperties": True,
+                },
+                mode="serialization",
+            ),
+        ]
+
+
+if TYPE_CHECKING:
+    AssetParam: TypeAlias = Annotated[_AssetT, "asset_param"]  # TODO?
+else:
+    AssetParam = _AssetParam
 
 
 def _hash_safe_json_dumps(obj):
