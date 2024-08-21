@@ -31,9 +31,10 @@ Main idea
 ### Basics
 
 - [ ] Rename back to `Task` and `task_id`
-- [ ] Move `.load()` to Target (!) -> Generic only in target
+- [ ] Move `.load()` to Target (!) -> Generic only in target, See Notes!
 - [ ] Use annotation instead of json_schema-hack to pass extra info about parameters
 - [ ] basic unit testing
+- [ ] Basic heuristic for run-time type checking of Generic type in TaskParams
 - [ ] Express dynamic deps explicitly (Generic: Task[TargetT, RunT], StaticTask,
       DynamicTask) or just class variable `has_dynamic_dependencies: bool` (possible to
       overload type hints on this? Yes: <https://stackoverflow.com/questions/70136046/can-you-type-hint-overload-a-return-type-for-a-method-based-on-an-argument-passe>
@@ -49,3 +50,49 @@ Main idea
 
 - [ ] Luigi runner
 - [ ] Prefect runner
+
+## Notes
+
+### Types and "API"
+
+Put all loading under Target, all targets load something, None
+
+So base target has load and exits
+
+TGT[LoadT]
+
+FSTGT also has open(r/w)
+
+FSTGT[LoadT, StreamT]
+
+FSTGT base class takes serialiser as arg, should comply with but does not affect generic types. It could additionally specify the file format with just some Annotated[StreamT, …]
+
+TaskParam should if possible support (only!) target protocols, consuming task should only care about LoadT and/or StreamT
+
+Rename back Asset to Task, the target is the asset.
+
+The reason to move load to target is
+
+- cleaner types
+- Asset vs task…
+- All targets can be created via target manager
+
+Target = TargetManager.get_fs_tgt(task=self, path, root_key)
+
+Can manage roots but also IN MEMORY caches based on the task instances. Can be configured per run…
+
+FDF = Annotated[pd.DataFrame, Feather]
+
+Autoinfer target from generic, should be possible:)
+
+DFFeather = Annotated[bytes, DFFeatherSerializer]
+
+Class MyTask(
+Task[FST[pd.DataFrame, DFFeather]
+):
+…
+
+Class Dowstream(Task[…]):
+task: TaskParam[TGT[pd.DataFrame]]
+
+FST[PydanticModel, JSONStr]

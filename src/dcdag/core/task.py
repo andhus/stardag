@@ -17,47 +17,47 @@ from pydantic import (
 from typing_extensions import List, TypeAlias, Union
 
 from dcdag.core.parameter import _ParameterConfig
+from dcdag.core.target import Target
 
-LoadedT = TypeVar("LoadedT", covariant=True)
-TargetT = TypeVar("TargetT", covariant=True)
+TargetT = TypeVar("TargetT", bound=Union[Target, None], covariant=True)
 
-AssetStruct: TypeAlias = Union["Asset", List["AssetStruct"], Dict[str, "AssetStruct"]]
+TaskStruct: TypeAlias = Union["Task", List["TaskStruct"], Dict[str, "TaskStruct"]]
 
-# The type allowed for assets to declare their dependencies. Note that it would be
-# enough with just list[Asset], but allowing these types are only for visualization
+# The type allowed for tasks to declare their dependencies. Note that it would be
+# enough with just list[Task], but allowing these types are only for visualization
 # purposes and dev UX - it allows for grouping and labeling of the incoming "edges"
 # in the DAG.
-AssetDeps: TypeAlias = Union[
-    None, "Asset", List["Asset"], Dict[str, "Asset"], Dict[str, List["Asset"]]
+TaskDeps: TypeAlias = Union[
+    None, "Task", List["Task"], Dict[str, "Task"], Dict[str, List["Task"]]
 ]
 
 
 class _Register:
     def __init__(self):
-        self._family_to_class: dict[str, Type["Asset"]] = {}
+        self._family_to_class: dict[str, Type["Task"]] = {}
 
-    def add(self, asset_class: Type["Asset"]):
-        # TODO support luigi style namespacing
-        if self._family_to_class.get(asset_class.family_name()):
+    def add(self, task_class: Type["Task"]):
+        # TODO support luigi style name spacing
+        if self._family_to_class.get(task_class.family_name()):
             raise ValueError(
-                f"Asset family name {asset_class.family_name()} already registered."
+                f"Task family name {task_class.family_name()} already registered."
             )
-        self._family_to_class[asset_class.family_name()] = asset_class
+        self._family_to_class[task_class.family_name()] = task_class
 
-    def get(self, family_name: str) -> Type["Asset"]:
+    def get(self, family_name: str) -> Type["Task"]:
         return self._family_to_class[family_name]
 
 
 _REGISTER = _Register()
 
 
-class AssetIDRef(BaseModel):
+class TaskIDRef(BaseModel):
     family_name: str
     version: str | None
     id_hash: str
 
 
-class Asset(BaseModel, Generic[LoadedT, TargetT]):
+class Task(BaseModel, Generic[TargetT]):
     __version__: ClassVar[str | None] = None
 
     version: str | None = Field(default=None, description="Version of the task code.")
@@ -84,15 +84,15 @@ class Asset(BaseModel, Generic[LoadedT, TargetT]):
         # TODO automatically set version default to __version__.
 
     @abstractmethod
-    def load(self) -> LoadedT: ...
+    def output(self) -> TargetT: ...
 
     @abstractmethod
-    def target(self) -> TargetT: ...
+    def run(self) -> None:
+        """Execute the task logic."""
+        # TODO dynamic deps, including type hint
+        ...
 
-    @abstractmethod
-    def run(self) -> None: ...
-
-    def requires(self) -> AssetDeps:
+    def requires(self) -> TaskDeps:
         return None
 
     @classmethod
@@ -104,8 +104,8 @@ class Asset(BaseModel, Generic[LoadedT, TargetT]):
         return get_str_hash(self._id_hash_json())
 
     @property
-    def id_ref(self) -> AssetIDRef:
-        return AssetIDRef(
+    def id_ref(self) -> TaskIDRef:
+        return TaskIDRef(
             family_name=self.family_name(),
             version=self.version,
             id_hash=self.id_hash,
@@ -131,86 +131,80 @@ class Asset(BaseModel, Generic[LoadedT, TargetT]):
         return _hash_safe_json_dumps(self._id_hash_jsonable())
 
 
-_ASSET_FAMILY_KEY = "__family_name"
+_TASK_FAMILY_KEY = "__family_name"
 
 
-def _get_asset_param_validate(annotation):
-    def _asset_param_validate(
+def _get_task_param_validate(annotation):
+    def _task_param_validate(
         x: Any,
         handler: ValidatorFunctionWrapHandler,
         info: ValidationInfo,
-    ) -> Asset:
+    ) -> Task:
         if isinstance(x, dict):
-            if _ASSET_FAMILY_KEY not in x:
+            if _TASK_FAMILY_KEY not in x:
                 raise ValueError(
-                    f"Asset parameter dict must have a '{_ASSET_FAMILY_KEY}' key."
+                    f"Task parameter dict must have a '{_TASK_FAMILY_KEY}' key."
                 )
 
-            instance = _REGISTER.get(x[_ASSET_FAMILY_KEY])(
-                **{key: value for key, value in x.items() if key != _ASSET_FAMILY_KEY}
+            instance = _REGISTER.get(x[_TASK_FAMILY_KEY])(
+                **{key: value for key, value in x.items() if key != _TASK_FAMILY_KEY}
             )
-        elif isinstance(x, Asset):
+        elif isinstance(x, Task):
             instance = x
         else:
-            raise ValueError(f"Invalid asset parameter type: {type(x)}")
+            raise ValueError(f"Invalid task parameter type: {type(x)}")
 
         try:
             return handler(instance)
         except ValidationError:
             # print(
-            #     f"Error in asset parameter validation: {e}"
+            #     f"Error in task parameter validation: {e}"
             #     f"\nAnnotation: {annotation}"
             # )
             # check that the annotation is correct
-            if not isinstance(instance, Asset):
+            if not isinstance(instance, Task):
                 raise ValueError(
-                    f"Asset parameter must be of type {Asset}, got {type(instance)}."
+                    f"Task parameter must be of type {Task}, got {type(instance)}."
                 )
 
             meta: dict = annotation.__pydantic_generic_metadata__
             origin = meta.get("origin")
-            if not origin == Asset:  # TODO subclass check?
+            if not origin == Task:  # TODO subclass check?
                 raise ValueError(
-                    f"Asset parameter must be of type {Asset}, got {origin}."
+                    f"Task parameter must be of type {Task}, got {origin}."
                 )
 
-            load_t, target_t = meta.get("args", (Any, Any))
+            (target_t,) = meta.get("args", (Any,))
 
-            if load_t is not Any:
-                if not instance.load.__annotations__["return"] == load_t:
-                    raise ValueError(
-                        f"Asset parameter load method must return {load_t}, got "
-                        f"{instance.load.__annotations__['return']}."
-                    )
             if target_t is not Any:
-                if not instance.target.__annotations__["return"] == target_t:
+                if not instance.output.__annotations__["return"] == target_t:
                     raise ValueError(
-                        f"Asset parameter target method must return {target_t}, got "
-                        f"{instance.target.__annotations__['return']}."
+                        f"Task parameter target method must return {target_t}, got "
+                        f"{instance.output.__annotations__['return']}."
                     )
 
         return instance
 
-    return _asset_param_validate
+    return _task_param_validate
 
 
-_AssetT = TypeVar("_AssetT", bound=Asset)
+_TaskT = TypeVar("_TaskT", bound=Task)
 
 
 # See: https://github.com/pydantic/pydantic/issues/8202#issuecomment-2264669699
-class _AssetParam:
+class _TaskParam:
     def __class_getitem__(cls, item):
         return Annotated[
             item,
-            WrapValidator(_get_asset_param_validate(item)),
+            WrapValidator(_get_task_param_validate(item)),
             PlainSerializer(
-                lambda x: {**x.model_dump(), _ASSET_FAMILY_KEY: x.family_name()}
+                lambda x: {**x.model_dump(), _TASK_FAMILY_KEY: x.family_name()}
             ),
             WithJsonSchema(
                 {
                     "type": "object",
                     "properties": {
-                        _ASSET_FAMILY_KEY: {"type": "string"},
+                        _TASK_FAMILY_KEY: {"type": "string"},
                     },
                     "additionalProperties": True,
                 },
@@ -220,9 +214,9 @@ class _AssetParam:
 
 
 if TYPE_CHECKING:
-    AssetParam: TypeAlias = Annotated[_AssetT, "asset_param"]  # TODO?
+    TaskParam: TypeAlias = Annotated[_TaskT, "task_param"]  # TODO?
 else:
-    AssetParam = _AssetParam
+    TaskParam = _TaskParam
 
 
 def _hash_safe_json_dumps(obj):

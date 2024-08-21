@@ -1,30 +1,27 @@
 import json
-from typing import Any
 
 from pydantic import BaseModel
 
-from dcdag.core.asset import Asset, AssetParam
 from dcdag.core.parameter import ParamField
+from dcdag.core.target import InMemoryTarget, LoadableTarget
+from dcdag.core.task import Task, TaskParam
 
 
 class TestModel(BaseModel):
     test: str = "testing"
 
 
-class SubAsset(Asset[int, None]):
+class SubTask(Task[LoadableTarget[int]]):
     param: int
 
-    def load(self) -> int:
-        return self.param
-
-    def target(self) -> None:
-        return
+    def output(self) -> InMemoryTarget[int]:
+        return InMemoryTarget(self.id_hash)
 
     def run(self) -> None:
-        pass
+        self.output().save(self.param)
 
 
-class MyAsset(Asset[str, None]):
+class MyTask(Task[LoadableTarget[str]]):
     a: int
     b: str
     c: str = ParamField(
@@ -33,29 +30,26 @@ class MyAsset(Asset[str, None]):
         # id_hash_include=lambda x: x != "C",
     )
     model: TestModel = TestModel()
-    sub_asset: AssetParam[Asset[int, Any]]
-    sub_asset_2: AssetParam[SubAsset]
+    sub_task: TaskParam[Task[LoadableTarget[int]]]
+    sub_task_2: TaskParam[SubTask]
 
-    def load(self) -> str:
-        return f"{self.a}, {self.b}"
-
-    def target(self) -> None:
-        return
+    def output(self) -> InMemoryTarget[str]:
+        return InMemoryTarget(self.id_hash)
 
     def run(self) -> None:
-        pass
+        self.output().save(f"{self.a}, {self.b}")
 
 
 if __name__ == "__main__":
-    my_asset = MyAsset(
+    my_task = MyTask(
         a=1,
         b="b",
-        sub_asset=SubAsset(param=1),
-        sub_asset_2=SubAsset(param=2),
+        sub_task=SubTask(param=1),
+        sub_task_2=SubTask(param=2),
     )
-    print(json.dumps(my_asset._id_hash_jsonable(), indent=2))
-    print(my_asset.id_hash)
-    print(my_asset.id_ref)
-    dumped = my_asset.model_dump()
+    print(json.dumps(my_task._id_hash_jsonable(), indent=2))
+    print(my_task.id_hash)
+    print(my_task.id_ref)
+    dumped = my_task.model_dump()
     print(dumped)
-    print(MyAsset.model_validate(dumped))
+    print(MyTask.model_validate(dumped))
