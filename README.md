@@ -25,3 +25,27 @@ Main idea
 - Declarative: Concurrency and execution can be planned separately. has its limitiations, but no framework gives it a ambitious go...
 - `make`/`luigi` style
 - Typesafe/hints, leverage pythons ecosystem around types...
+
+## TODO
+
+### Basics
+
+- [ ] Rename back to `Task` and `task_id`
+- [ ] Move `.load()` to Target (!) -> Generic only in target
+- [ ] Use annotation instead of json_schema-hack to pass extra info about parameters
+- [ ] basic unit testing
+- [ ] Express dynamic deps explicitly (Generic: Task[TargetT, RunT], StaticTask,
+      DynamicTask) or just class variable `has_dynamic_dependencies: bool` (possible to
+      overload type hints on this? Yes: <https://stackoverflow.com/questions/70136046/can-you-type-hint-overload-a-return-type-for-a-method-based-on-an-argument-passe>
+      but probably overkill)
+
+### Features
+
+- [ ] FileSystemTargets (luigi style or alternative?)
+- [ ] Serialization, based on type annotation of task target?
+-
+
+### Execution
+
+- [ ] Luigi runner
+- [ ] Prefect runner
