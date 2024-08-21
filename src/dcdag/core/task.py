@@ -1,4 +1,5 @@
 import json
+import warnings
 from abc import abstractmethod
 from functools import cached_property
 from hashlib import sha1
@@ -38,21 +39,21 @@ class _Register:
 
     def add(self, task_class: Type["Task"]):
         # TODO support luigi style name spacing
-        if self._family_to_class.get(task_class.family_name()):
+        if self._family_to_class.get(task_class.get_task_family()):
             raise ValueError(
-                f"Task family name {task_class.family_name()} already registered."
+                f"Task family name {task_class.get_task_family()} already registered."
             )
-        self._family_to_class[task_class.family_name()] = task_class
+        self._family_to_class[task_class.get_task_family()] = task_class
 
-    def get(self, family_name: str) -> Type["Task"]:
-        return self._family_to_class[family_name]
+    def get(self, task_family: str) -> Type["Task"]:
+        return self._family_to_class[task_family]
 
 
 _REGISTER = _Register()
 
 
 class TaskIDRef(BaseModel):
-    family_name: str
+    task_family: str
     version: str | None
     id_hash: str
 
@@ -96,19 +97,19 @@ class Task(BaseModel, Generic[TargetT]):
         return None
 
     @classmethod
-    def family_name(cls) -> str:
+    def get_task_family(cls) -> str:
         return cls.__name__
 
     @cached_property
-    def id_hash(self) -> str:
+    def task_id(self) -> str:
         return get_str_hash(self._id_hash_json())
 
     @property
     def id_ref(self) -> TaskIDRef:
         return TaskIDRef(
-            family_name=self.family_name(),
+            task_family=self.get_task_family(),
             version=self.version,
-            id_hash=self.id_hash,
+            id_hash=self.task_id,
         )
 
     def run_version_checked(self):
@@ -119,7 +120,7 @@ class Task(BaseModel, Generic[TargetT]):
 
     def _id_hash_jsonable(self) -> dict:
         return {
-            "family_name": self.family_name(),
+            "task_family": self.get_task_family(),
             "parameters": {
                 name: config.id_hasher(getattr(self, name))
                 for name, config in self._param_configs.items()
@@ -131,7 +132,7 @@ class Task(BaseModel, Generic[TargetT]):
         return _hash_safe_json_dumps(self._id_hash_jsonable())
 
 
-_TASK_FAMILY_KEY = "__family_name"
+_TASK_FAMILY_KEY = "__task_family"
 
 
 def _get_task_param_validate(annotation):
@@ -177,11 +178,12 @@ def _get_task_param_validate(annotation):
             (target_t,) = meta.get("args", (Any,))
 
             if target_t is not Any:
-                # TODO check must be loosened.
-                if not isinstance(instance.output.__annotations__["return"], target_t):
-                    raise ValueError(
-                        f"Task parameter target method must return {target_t}, got "
-                        f"{instance.output.__annotations__['return']}."
+                # TODO check must be loosened and improved, check libs...
+                if not instance.output.__annotations__["return"] == target_t:
+                    warnings.warn(
+                        "Could not verify task parameter type compatibility."
+                        f"Input Task.output() must be compatible with {target_t}, "
+                        f"got {instance.output.__annotations__['return']}."
                     )
 
         return instance
@@ -199,7 +201,7 @@ class _TaskParam:
             item,
             WrapValidator(_get_task_param_validate(item)),
             PlainSerializer(
-                lambda x: {**x.model_dump(), _TASK_FAMILY_KEY: x.family_name()}
+                lambda x: {**x.model_dump(), _TASK_FAMILY_KEY: x.get_task_family()}
             ),
             WithJsonSchema(
                 {

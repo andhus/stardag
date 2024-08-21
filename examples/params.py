@@ -15,7 +15,7 @@ class SubTask(Task[LoadableTarget[int]]):
     param: int
 
     def output(self) -> InMemoryTarget[int]:
-        return InMemoryTarget(self.id_hash)
+        return InMemoryTarget(self.task_id)
 
     def run(self) -> None:
         self.output().save(self.param)
@@ -34,7 +34,7 @@ class MyTask(Task[LoadableTarget[str]]):
     sub_task_2: TaskParam[SubTask]
 
     def output(self) -> InMemoryTarget[str]:
-        return InMemoryTarget(self.id_hash)
+        return InMemoryTarget(self.task_id)
 
     def run(self) -> None:
         self.output().save(f"{self.a}, {self.b}")
@@ -48,7 +48,7 @@ if __name__ == "__main__":
         sub_task_2=SubTask(param=2),
     )
     print(json.dumps(my_task._id_hash_jsonable(), indent=2))
-    print(my_task.id_hash)
+    print(my_task.task_id)
     print(my_task.id_ref)
     dumped = my_task.model_dump()
     print(dumped)
