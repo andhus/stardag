@@ -177,7 +177,8 @@ def _get_task_param_validate(annotation):
             (target_t,) = meta.get("args", (Any,))
 
             if target_t is not Any:
-                if not instance.output.__annotations__["return"] == target_t:
+                # TODO check must be loosened.
+                if not isinstance(instance.output.__annotations__["return"], target_t):
                     raise ValueError(
                         f"Task parameter target method must return {target_t}, got "
                         f"{instance.output.__annotations__['return']}."
