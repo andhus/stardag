@@ -1,33 +1,22 @@
+import json
 from abc import abstractmethod
 from functools import cached_property
 from hashlib import sha1
-import json
-from typing import (
-    TYPE_CHECKING,
-    Annotated,
-    Any,
-    ClassVar,
-    Dict,
-    Generic,
-    Type,
-    TypeVar,
-    get_origin,
-)
+from typing import TYPE_CHECKING, Annotated, Any, ClassVar, Dict, Generic, Type, TypeVar
+
 from pydantic import (
     BaseModel,
-    BeforeValidator,
     Field,
     PlainSerializer,
-    WithJsonSchema,
-    ValidationInfo,
     ValidationError,
+    ValidationInfo,
     ValidatorFunctionWrapHandler,
+    WithJsonSchema,
     WrapValidator,
 )
-from typing_extensions import TypeAlias, Union, List
+from typing_extensions import List, TypeAlias, Union
 
 from dcdag.core.parameter import _ParameterConfig
-
 
 LoadedT = TypeVar("LoadedT", covariant=True)
 TargetT = TypeVar("TargetT", covariant=True)
@@ -44,7 +33,6 @@ AssetDeps: TypeAlias = Union[
 
 
 class _Register:
-
     def __init__(self):
         self._family_to_class: dict[str, Type["Asset"]] = {}
 
@@ -70,14 +58,12 @@ class AssetIDRef(BaseModel):
 
 
 class Asset(BaseModel, Generic[LoadedT, TargetT]):
-
     __version__: ClassVar[str | None] = None
 
-    version: str | None = Field(None, description="Version of the task code.")
+    version: str | None = Field(default=None, description="Version of the task code.")
 
     if TYPE_CHECKING:
-        _param_configs: Dict[str, _ParameterConfig]
-
+        _param_configs: ClassVar[Dict[str, _ParameterConfig]] = {}
     else:
         _param_configs = {}
 
@@ -170,7 +156,7 @@ def _get_asset_param_validate(annotation):
 
         try:
             return handler(instance)
-        except ValidationError as e:
+        except ValidationError:
             # print(
             #     f"Error in asset parameter validation: {e}"
             #     f"\nAnnotation: {annotation}"
@@ -188,15 +174,15 @@ def _get_asset_param_validate(annotation):
                     f"Asset parameter must be of type {Asset}, got {origin}."
                 )
 
-            load_t, target_t = meta.get("args")
+            load_t, target_t = meta.get("args", (Any, Any))
 
-            if not load_t is Any:
+            if load_t is not Any:
                 if not instance.load.__annotations__["return"] == load_t:
                     raise ValueError(
                         f"Asset parameter load method must return {load_t}, got "
                         f"{instance.load.__annotations__['return']}."
                     )
-            if not target_t is Any:
+            if target_t is not Any:
                 if not instance.target.__annotations__["return"] == target_t:
                     raise ValueError(
                         f"Asset parameter target method must return {target_t}, got "
