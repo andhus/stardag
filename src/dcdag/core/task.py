@@ -3,7 +3,17 @@ import warnings
 from abc import abstractmethod
 from functools import cached_property
 from hashlib import sha1
-from typing import TYPE_CHECKING, Annotated, Any, ClassVar, Dict, Generic, Type, TypeVar
+from typing import (
+    TYPE_CHECKING,
+    Annotated,
+    Any,
+    ClassVar,
+    Dict,
+    Generic,
+    Tuple,
+    Type,
+    TypeVar,
+)
 
 from pydantic import (
     BaseModel,
@@ -58,6 +68,10 @@ class TaskIDRef(BaseModel):
     id_hash: str
 
 
+class _Generic(Generic[TargetT]):
+    pass
+
+
 class Task(BaseModel, Generic[TargetT]):
     __version__: ClassVar[str | None] = None
 
@@ -65,6 +79,7 @@ class Task(BaseModel, Generic[TargetT]):
 
     if TYPE_CHECKING:
         _param_configs: ClassVar[Dict[str, _ParameterConfig]] = {}
+        __orig_class__: ClassVar[Any]  # _Generic[TargetT]
     else:
         _param_configs = {}
 
@@ -83,6 +98,17 @@ class Task(BaseModel, Generic[TargetT]):
             for name, field_info in cls.model_fields.items()
         }
         # TODO automatically set version default to __version__.
+
+    def __class_getitem__(
+        cls: Type[BaseModel], params: Union[Type[Any], Tuple[Type[Any], ...]]
+    ) -> Type[Any]:
+        """Hack to be able to access the generic type of the class from subclasses. See:
+        https://github.com/pydantic/pydantic/discussions/4904#discussioncomment-4592052
+        """
+        create_model = super().__class_getitem__(params)  # type: ignore
+
+        create_model.__orig_class__ = _Generic[params]  # type: ignore
+        return create_model
 
     @abstractmethod
     def output(self) -> TargetT: ...

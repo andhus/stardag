@@ -1,6 +1,9 @@
 import typing
 from contextlib import contextmanager
-from pathlib import PosixPath
+from io import BytesIO, StringIO
+from pathlib import Path
+
+from pydantic import TypeAdapter
 
 
 @typing.runtime_checkable
@@ -72,34 +75,284 @@ class InMemoryTarget(LoadableSaveableTarget[LoadedT]):
 
 
 StreamT = typing.TypeVar("StreamT", bound=typing.Union[str, bytes])
+StreamT_co = typing.TypeVar(
+    "StreamT_co", bound=typing.Union[str, bytes], covariant=True
+)
+StreamT_contra = typing.TypeVar(
+    "StreamT_contra", bound=typing.Union[str, bytes], contravariant=True
+)
 
-OpenMode = typing.Literal["r", "w"]
+OpenMode = typing.Literal["r", "w", "rb", "wb"]
 # TODO consider adding ["rb", "wb"] to OpenMode instead of upfront?
+# Yes, would be cleaner!
 
 
 @typing.runtime_checkable
-class FileSystemTargetHandle(
-    typing.Generic[StreamT],
-    typing.Protocol,
-):
-    # TODO split up into readable and writable
-    def read(self, size: int) -> StreamT: ...
-    def write(self, data: StreamT) -> None: ...
+class FileSystemTargetHandle(typing.Protocol):
     def close(self) -> None: ...
-    def __enter__(self) -> "FileSystemTargetHandle[StreamT]": ...
+    def __enter__(self) -> "FileSystemTargetHandle": ...
     def __exit__(self, *args) -> None: ...
 
 
-class FileSystemTarget(
-    Target,
-    typing.Generic[StreamT],
+@typing.runtime_checkable
+class ReadableFileSystemTargetHandle(
+    FileSystemTargetHandle,
+    typing.Generic[StreamT_co],
     typing.Protocol,
 ):
-    path: PosixPath
+    def read(self, size: int = -1) -> StreamT_co: ...
 
-    def __init__(self, path: str | PosixPath) -> None:
-        self.path = PosixPath(path)
+
+@typing.runtime_checkable
+class WritableFileSystemTargetHandle(
+    FileSystemTargetHandle,
+    typing.Generic[StreamT_contra],
+    typing.Protocol,
+):
+    def write(self, data: StreamT_contra) -> None: ...
+
+
+BytesT = typing.TypeVar("BytesT", bound=bytes)
+
+
+class FileSystemTargetGeneric(
+    Target,
+    typing.Generic[BytesT],
+    typing.Protocol,
+):
+    path: str
+
+    def __init__(self, path: str) -> None:
+        self.path = path
 
     def exists(self) -> bool: ...
 
-    def open(self, mode: OpenMode) -> FileSystemTargetHandle[StreamT]: ...
+    @typing.overload
+    def open(
+        self, mode: typing.Literal["r"]
+    ) -> ReadableFileSystemTargetHandle[str]: ...
+
+    @typing.overload
+    def open(
+        self, mode: typing.Literal["rb"]
+    ) -> ReadableFileSystemTargetHandle[BytesT]: ...
+
+    @typing.overload
+    def open(
+        self, mode: typing.Literal["w"]
+    ) -> WritableFileSystemTargetHandle[str]: ...
+
+    @typing.overload
+    def open(
+        self, mode: typing.Literal["wb"]
+    ) -> WritableFileSystemTargetHandle[BytesT]: ...
+
+    def open(self, mode: OpenMode) -> FileSystemTargetHandle: ...
+
+
+class FileSystemTarget(FileSystemTargetGeneric[bytes]): ...
+
+
+class LoadableSaveableFileSystemTarget(
+    LoadableSaveableTarget[LoadedT],
+    FileSystemTargetGeneric[bytes],
+    typing.Generic[LoadedT],
+    typing.Protocol,
+): ...
+
+
+LSFST = LoadableSaveableFileSystemTarget
+
+
+class LocalTarget(FileSystemTarget):
+    @property
+    def _path(self) -> Path:
+        return Path(self.path)
+
+    def exists(self) -> bool:
+        return self._path.exists()
+
+    def open(self, mode: OpenMode) -> FileSystemTargetHandle:  # type: ignore
+        return self._path.open(mode)  # type: ignore
+
+
+class InMemoryFileSystemTarget(FileSystemTarget):
+    """Useful in testing"""
+
+    path_to_bytes: dict[str, bytes] = {}  # Note class variable!
+
+    @classmethod
+    def clear_targets(cls):
+        cls.path_to_target = {}
+
+    @classmethod
+    @contextmanager
+    def cleared(cls):
+        cls.clear_targets()
+        try:
+            yield cls.path_to_bytes
+        finally:
+            cls.clear_targets()
+
+    def __init__(self, path: str):
+        self.path = path
+
+    def exists(self):  # type: ignore
+        return self.path in self.path_to_bytes
+
+    def open(self, mode: OpenMode) -> FileSystemTargetHandle:  # type: ignore
+        if mode == "r":
+            return _InMemoryStrReadableFileSystemTargetHandle(
+                self.path_to_bytes[self.path]
+            )
+        if mode == "rb":
+            return _InMemoryBytesReadableFileSystemTargetHandle(
+                self.path_to_bytes[self.path]
+            )
+        if mode == "w":
+            return _InMemoryStrWritableFileSystemTargetHandle(self.path)
+        if mode == "wb":
+            return _InMemoryBytesWritableFileSystemTargetHandle(self.path)
+
+        raise ValueError(f"Invalid mode {mode}")
+
+
+class _InMemoryBytesWritableFileSystemTargetHandle(
+    WritableFileSystemTargetHandle[bytes]
+):
+    def __init__(self, path: str) -> None:
+        self.path = path
+
+    def write(self, data: bytes) -> None:
+        path_to_bytes = InMemoryFileSystemTarget.path_to_bytes
+        path_to_bytes[self.path] = path_to_bytes.setdefault(self.path, b"") + data
+
+    def close(self) -> None:
+        pass
+
+    def __enter__(self) -> "_InMemoryBytesWritableFileSystemTargetHandle":
+        return self
+
+    def __exit__(self, *args) -> None:
+        pass
+
+
+class _InMemoryStrWritableFileSystemTargetHandle(WritableFileSystemTargetHandle[str]):
+    def __init__(self, path: str) -> None:
+        self.path = path
+
+    def write(self, data: str) -> None:
+        path_to_bytes = InMemoryFileSystemTarget.path_to_bytes
+        path_to_bytes[self.path] = (
+            path_to_bytes.setdefault(self.path, b"") + data.encode()
+        )
+
+    def close(self) -> None:
+        pass
+
+    def __enter__(self) -> "_InMemoryStrWritableFileSystemTargetHandle":
+        return self
+
+    def __exit__(self, *args) -> None:
+        pass
+
+
+class _InMemoryBytesReadableFileSystemTargetHandle(
+    ReadableFileSystemTargetHandle[bytes]
+):
+    def __init__(self, data: bytes) -> None:
+        self.bytes_io = BytesIO(data)
+
+    def read(self, size: int = -1) -> bytes:
+        return self.bytes_io.read(size)
+
+    def close(self) -> None:
+        pass
+
+    def __enter__(self) -> "_InMemoryBytesReadableFileSystemTargetHandle":
+        return self
+
+    def __exit__(self, *args) -> None:
+        pass
+
+
+class _InMemoryStrReadableFileSystemTargetHandle(ReadableFileSystemTargetHandle[str]):
+    def __init__(self, data: bytes) -> None:
+        self.string_io = StringIO(data.decode())
+
+    def read(self, size: int = -1) -> str:
+        return self.string_io.read(size)
+
+    def close(self) -> None:
+        pass
+
+    def __enter__(self) -> "_InMemoryStrReadableFileSystemTargetHandle":
+        return self
+
+    def __exit__(self, *args) -> None:
+        pass
+
+
+class Serializer(typing.Generic[LoadedT], typing.Protocol):
+    def dump(
+        self, obj: LoadedT, handle: WritableFileSystemTargetHandle[bytes]
+    ) -> None: ...
+    def load(self, handle: ReadableFileSystemTargetHandle[bytes]) -> LoadedT: ...
+
+
+class Serializable(
+    LoadableSaveableFileSystemTarget[LoadedT],
+    typing.Generic[LoadedT],
+):
+    def __init__(
+        self,
+        wrapped: FileSystemTarget,
+        serializer: Serializer[LoadedT],
+    ) -> None:
+        self.serializer = serializer
+        self.wrapped = wrapped
+
+    def load(self) -> LoadedT:
+        with self.open("rb") as handle:
+            return self.serializer.load(handle)  # type: ignore  # TODO?
+
+    def save(self, obj: LoadedT) -> None:
+        with self.open("wb") as handle:
+            self.serializer.dump(obj, handle)  # type: ignore  # TODO?
+
+    def exists(self) -> bool:
+        return self.wrapped.exists()
+
+    @typing.overload
+    def open(
+        self, mode: typing.Literal["r"]
+    ) -> ReadableFileSystemTargetHandle[str]: ...
+
+    @typing.overload
+    def open(
+        self, mode: typing.Literal["rb"]
+    ) -> ReadableFileSystemTargetHandle[bytes]: ...
+
+    @typing.overload
+    def open(
+        self, mode: typing.Literal["w"]
+    ) -> WritableFileSystemTargetHandle[str]: ...
+
+    @typing.overload
+    def open(
+        self, mode: typing.Literal["wb"]
+    ) -> WritableFileSystemTargetHandle[bytes]: ...
+
+    def open(self, mode: OpenMode) -> FileSystemTargetHandle:
+        return self.wrapped.open(mode)
+
+
+class JSONSerializer(Serializer[LoadedT]):
+    def __init__(self, annotation: typing.Type[LoadedT]) -> None:
+        self.type_adapter = TypeAdapter(annotation)
+
+    def dump(self, obj: LoadedT, handle: WritableFileSystemTargetHandle[bytes]) -> None:
+        handle.write(self.type_adapter.dump_json(obj))
+
+    def load(self, handle: ReadableFileSystemTargetHandle[bytes]) -> LoadedT:
+        return self.type_adapter.validate_json(handle.read())

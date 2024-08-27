@@ -2,8 +2,16 @@ import json
 
 from pydantic import BaseModel
 
+from dcdag.core.fsttask import AutoFSTTask
 from dcdag.core.parameter import ParamField
-from dcdag.core.target import InMemoryTarget, LoadableTarget
+from dcdag.core.target import (
+    LSFST,
+    InMemoryFileSystemTarget,
+    InMemoryTarget,
+    JSONSerializer,
+    LoadableTarget,
+    Serializable,
+)
 from dcdag.core.task import Task, TaskParam
 
 
@@ -40,6 +48,28 @@ class MyTask(Task[LoadableTarget[str]]):
         self.output().save(f"{self.a}, {self.b}")
 
 
+class OtherTask(Task[LSFST[dict]]):
+    a: int
+    b: str
+
+    def output(self) -> LSFST[dict]:
+        return Serializable(
+            InMemoryFileSystemTarget(self.task_id),
+            serializer=JSONSerializer(annotation=dict),
+        )
+
+    def run(self) -> None:
+        self.output().save({"a": self.a, "b": self.b})
+
+
+class OtherTask2(AutoFSTTask[dict]):
+    a: int
+    b: str
+
+    def run(self) -> None:
+        self.output().save({"a": self.a, "b": self.b})
+
+
 if __name__ == "__main__":
     my_task = MyTask(
         a=1,
@@ -53,3 +83,8 @@ if __name__ == "__main__":
     dumped = my_task.model_dump()
     print(dumped)
     print(MyTask.model_validate(dumped))
+
+    other_task = OtherTask2(a=1, b="b")
+    other_task.run()
+    print(other_task.output().load())
+    print(InMemoryFileSystemTarget.path_to_bytes)
