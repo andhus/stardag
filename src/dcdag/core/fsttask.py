@@ -1,7 +1,7 @@
 import typing
 
+from dcdag.core.resources import get_target
 from dcdag.core.target import (
-    InMemoryFileSystemTarget,
     JSONSerializer,
     LoadableSaveableFileSystemTarget,
     Serializable,
@@ -16,33 +16,31 @@ class AutoFSTTask(
     typing.Generic[LoadedT],
 ):
     @property
-    def file_system_target_class(self) -> typing.Type[InMemoryFileSystemTarget]:
-        return InMemoryFileSystemTarget
-
-    @property
-    def base_path(self) -> str:
+    def relpath_base(self) -> str:
         return ""
 
     @property
-    def params_path(self) -> str:
+    def relpath_extra(self) -> str:
         return ""
 
     @property
-    def filename(self) -> str:
+    def relpath_filename(self) -> str:
         return ""
 
     @property
-    def target_path(self) -> str:
+    def relpath(self) -> str:
         return "/".join(
             [
                 part
                 for part in [
-                    self.base_path,
+                    self.relpath_base,
                     self.get_task_family(),
                     f"v{self.version}" if self.version else "",
-                    self.params_path,
+                    self.relpath_extra,
+                    self.task_id[:2],
+                    self.task_id[2:4],
                     self.task_id,
-                    self.filename,
+                    self.relpath_filename,
                 ]
                 if part
             ]
@@ -52,6 +50,6 @@ class AutoFSTTask(
         # get generic type of self
         loaded_t = typing.get_args(self.__orig_class__)[0]
         return Serializable(
-            self.file_system_target_class(self.task_id),
+            wrapped=get_target(self.relpath, task=self),
             serializer=JSONSerializer(annotation=loaded_t),
         )
