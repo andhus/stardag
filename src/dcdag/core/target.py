@@ -2,6 +2,7 @@ import typing
 from contextlib import contextmanager
 from io import BytesIO, StringIO
 from pathlib import Path
+from types import TracebackType
 
 from pydantic import TypeAdapter
 
@@ -91,7 +92,13 @@ OpenMode = typing.Literal["r", "w", "rb", "wb"]
 class FileSystemTargetHandle(typing.Protocol):
     def close(self) -> None: ...
     def __enter__(self) -> "FileSystemTargetHandle": ...
-    def __exit__(self, *args) -> None: ...
+    def __exit__(
+        self,
+        type: type[BaseException] | None,
+        value: BaseException | None,
+        traceback: TracebackType | None,
+        /,
+    ) -> None: ...
 
 
 @typing.runtime_checkable
@@ -165,6 +172,9 @@ LSFST = LoadableSaveableFileSystemTarget
 
 
 class LocalTarget(FileSystemTarget):
+    def __init__(self, path: str) -> None:
+        self.path = path
+
     @property
     def _path(self) -> Path:
         return Path(self.path)
@@ -173,7 +183,13 @@ class LocalTarget(FileSystemTarget):
         return self._path.exists()
 
     def open(self, mode: OpenMode) -> FileSystemTargetHandle:  # type: ignore
-        return self._path.open(mode)  # type: ignore
+        if mode in ["r", "rb"]:
+            return self._path.open(mode)
+        if mode in ["w", "wb"]:
+            self._path.parent.mkdir(parents=True, exist_ok=True)
+            return self._path.open(mode)  # type: ignore
+
+        raise ValueError(f"Invalid mode {mode}")
 
 
 class InMemoryFileSystemTarget(FileSystemTarget):

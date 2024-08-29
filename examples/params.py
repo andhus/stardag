@@ -4,6 +4,8 @@ from pydantic import BaseModel
 
 from dcdag.core.fsttask import AutoFSTTask
 from dcdag.core.parameter import ParamField
+from dcdag.core.resources import target_factory_provider
+from dcdag.core.resources.target_factory import TargetFactory
 from dcdag.core.target import (
     LSFST,
     InMemoryFileSystemTarget,
@@ -86,5 +88,18 @@ if __name__ == "__main__":
 
     other_task = OtherTask2(a=1, b="b")
     other_task.run()
+    assert other_task.complete()
     print(other_task.output().load())
+    print(InMemoryFileSystemTarget.path_to_bytes)
+
+    with target_factory_provider.override(
+        TargetFactory(
+            target_roots={"default": "in-memory://"},
+            target_class_by_prefix={"in-memory://": InMemoryFileSystemTarget},
+        ),
+    ):
+        assert not other_task.complete()
+        other_task.run()
+        print(other_task.output().load())
+
     print(InMemoryFileSystemTarget.path_to_bytes)

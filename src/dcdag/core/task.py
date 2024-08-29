@@ -110,8 +110,16 @@ class Task(BaseModel, Generic[TargetT]):
         create_model.__orig_class__ = _Generic[params]  # type: ignore
         return create_model
 
-    @abstractmethod
-    def output(self) -> TargetT: ...
+    def complete(self) -> bool:
+        """Check if the task is complete."""
+        target = self.output()
+        if target is None:
+            raise NotImplementedError("Tasks must implement output() or complete().")
+
+        return target.exists()
+
+    def output(self) -> TargetT:
+        return None  # type: ignore
 
     @abstractmethod
     def run(self) -> None:
