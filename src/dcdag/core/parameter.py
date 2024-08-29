@@ -29,9 +29,9 @@ class IDHasher(IDHasherABC[ParameterT]):
         return self
 
     def __call__(self, value: ParameterT) -> JsonValue:
-        from dcdag.core.asset import Asset
+        from dcdag.core.task import Task
 
-        if isinstance(value, Asset):
+        if isinstance(value, Task):
             return value.id_ref.model_dump(mode="json")
 
         return self.type_adapter.dump_python(value, mode="json")
