@@ -42,6 +42,6 @@ def test_default_in_memory_target(
     assert InMemoryFileSystemTarget.path_to_bytes == {}
     test_data = b"test-test"
     with target.open("wb") as handle:
-        handle.write(test_data)  # type: ignore  # TODO check overloads!
+        handle.write(test_data)
 
     assert InMemoryFileSystemTarget.path_to_bytes == {target.path: test_data}

@@ -156,27 +156,7 @@ class FileSystemTargetGeneric(
 
 
 class FileSystemTarget(FileSystemTargetGeneric[bytes]):
-    @typing.overload
-    def open(
-        self, mode: typing.Literal["r"]
-    ) -> ReadableFileSystemTargetHandle[str]: ...
-
-    @typing.overload
-    def open(
-        self, mode: typing.Literal["rb"]
-    ) -> ReadableFileSystemTargetHandle[bytes]: ...
-
-    @typing.overload
-    def open(
-        self, mode: typing.Literal["w"]
-    ) -> WritableFileSystemTargetHandle[str]: ...
-
-    @typing.overload
-    def open(
-        self, mode: typing.Literal["wb"]
-    ) -> WritableFileSystemTargetHandle[bytes]: ...
-
-    def open(self, mode: OpenMode) -> FileSystemTargetHandle:
+    def open(self, mode):
         return self._open(mode=mode)
 
     def _open(self, mode: OpenMode):
