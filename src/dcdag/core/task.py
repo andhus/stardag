@@ -10,6 +10,8 @@ from typing import (
     ClassVar,
     Dict,
     Generic,
+    Mapping,
+    Sequence,
     Tuple,
     Type,
     TypeVar,
@@ -39,7 +41,7 @@ TaskStruct: TypeAlias = Union["Task", List["TaskStruct"], Dict[str, "TaskStruct"
 # purposes and dev UX - it allows for grouping and labeling of the incoming "edges"
 # in the DAG.
 TaskDeps: TypeAlias = Union[
-    None, "Task", List["Task"], Dict[str, "Task"], Dict[str, List["Task"]]
+    None, "Task", Sequence["Task"], Mapping[str, "Task"], Mapping[str, Sequence["Task"]]
 ]
 
 
