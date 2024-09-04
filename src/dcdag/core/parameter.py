@@ -1,13 +1,12 @@
 from __future__ import annotations
 
-import typing
+import abc
 from abc import abstractmethod
 from types import NoneType
 from typing import Any, Callable, Generic, Self, Type, TypeVar
 
-from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
+from pydantic import BaseModel, ConfigDict, TypeAdapter
 from pydantic.config import JsonDict, JsonValue
-from pydantic_core import PydanticUndefined
 
 ParameterT = TypeVar("ParameterT")
 
@@ -53,19 +52,30 @@ class IDHasher(IDHasherABC[ParameterT]):
         )
 
 
-def _always_include(value: Any) -> bool:
-    return True
+class IDHashIncludeABC(metaclass=abc.ABCMeta):
+    @abc.abstractmethod
+    def __call__(self, value: Any) -> bool: ...
 
 
-def _always_exclude(value: Any) -> bool:
-    return False
+class IDHashInclude(IDHashIncludeABC):
+    def __init__(self, include: bool | Callable[[Any], bool] = True) -> NoneType:
+        self._include = include
+
+    def __call__(self, value: Any) -> bool:
+        if callable(self._include):
+            return self._include(value)
+        return self._include
+
+    def __eq__(self, other: object) -> bool:
+        return isinstance(other, IDHashInclude) and self._include == other._include
+
+
+always_include = IDHashInclude(True)
 
 
 class _ParameterConfig(BaseModel, Generic[ParameterT]):
-    id_hash_include: Callable[[ParameterT], bool] = _always_include
-    id_hasher: Callable[[ParameterT], JsonValue] | IDHasher[ParameterT] = Field(
-        default_factory=IDHasher
-    )
+    id_hash_include: Callable[[ParameterT], bool]
+    id_hasher: Callable[[ParameterT], JsonValue] | IDHasher[ParameterT]
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
@@ -85,30 +95,30 @@ class _ParameterConfig(BaseModel, Generic[ParameterT]):
         return self.model_copy(update=update)
 
 
-def ParamField(  # noqa: C901
-    default: ParameterT = PydanticUndefined,
-    *,
-    default_factory: typing.Callable[[], ParameterT] | None = None,
-    significant: bool = True,
-    id_hash_include: Callable[[ParameterT], bool] = _always_include,
-    id_hasher: Callable[[ParameterT], JsonValue] | None = None,
-    **kwargs: Any,  # TODO typing?
-) -> Any:
-    """TODO: docstring
+# def ParamField(  # noqa: C901
+#     default: ParameterT = PydanticUndefined,
+#     *,
+#     default_factory: typing.Callable[[], ParameterT] | None = None,
+#     significant: bool = True,
+#     id_hash_include: Callable[[ParameterT], bool] = _always_include,
+#     id_hasher: Callable[[ParameterT], JsonValue] | None = None,
+#     **kwargs: Any,  # TODO typing?
+# ) -> Any:
+#     """TODO: docstring
 
-    Usage:
-    ```python
-    class MyTask(Task):
-        param: str = ParamField("my_default", significant=False)
-    ```
-    """
+#     Usage:
+#     ```python
+#     class MyTask(Task):
+#         param: str = ParamField("my_default", significant=False)
+#     ```
+#     """
 
-    return Field(
-        default=default,
-        default_factory=default_factory,
-        json_schema_extra=_ParameterConfig(
-            id_hash_include=id_hash_include if significant else _always_exclude,
-            id_hasher=IDHasher() if id_hasher is None else id_hasher,
-        ),
-        **kwargs,
-    )
+#     return Field(
+#         default=default,
+#         default_factory=default_factory,
+#         json_schema_extra=_ParameterConfig(
+#             id_hash_include=id_hash_include if significant else _always_exclude,
+#             id_hasher=IDHasher() if id_hasher is None else id_hasher,
+#         ),
+#         **kwargs,
+#     )

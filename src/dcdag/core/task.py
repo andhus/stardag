@@ -27,9 +27,16 @@ from pydantic import (
     WithJsonSchema,
     WrapValidator,
 )
+from pydantic.fields import FieldInfo
 from typing_extensions import List, TypeAlias, Union
 
-from dcdag.core.parameter import _ParameterConfig
+from dcdag.core.parameter import (
+    IDHasher,
+    IDHasherABC,
+    IDHashInclude,
+    IDHashIncludeABC,
+    _ParameterConfig,
+)
 from dcdag.core.target import Target
 
 TargetT = TypeVar("TargetT", bound=Union[Target, None], covariant=True)
@@ -89,14 +96,30 @@ class Task(BaseModel, Generic[TargetT]):
     def __pydantic_init_subclass__(cls, **kwargs: Any) -> None:
         super().__pydantic_init_subclass__(**kwargs)
         _REGISTER.add(cls)
+
+        def get_one(field_info: FieldInfo, class_or_tuple, default_factory):
+            matches = [
+                value
+                for value in field_info.metadata
+                if isinstance(value, class_or_tuple)
+            ]
+            if len(matches) > 1:
+                raise ValueError(f"Multiple {class_or_tuple} found in metadata.")
+            if len(matches) == 1:
+                return matches[0]
+
+            return default_factory()
+
+        def get_parameter_config(field_info: FieldInfo):
+            id_hasher = get_one(field_info, IDHasherABC, IDHasher)
+            id_hash_include = get_one(field_info, IDHashIncludeABC, IDHashInclude)
+            return _ParameterConfig(
+                id_hasher=id_hasher,
+                id_hash_include=id_hash_include,
+            ).init(annotation=field_info.rebuild_annotation())
+
         cls._param_configs = {
-            name: (
-                field_info.json_schema_extra.init(
-                    annotation=field_info.rebuild_annotation()
-                )
-                if isinstance(field_info.json_schema_extra, _ParameterConfig)
-                else _ParameterConfig().init(annotation=field_info.rebuild_annotation())
-            )
+            name: get_parameter_config(field_info)
             for name, field_info in cls.model_fields.items()
         }
         # TODO automatically set version default to __version__.
