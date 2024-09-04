@@ -157,6 +157,8 @@ class FileSystemTargetGeneric(
 
 class FileSystemTarget(FileSystemTargetGeneric[bytes]):
     def open(self, mode):
+        """For convenience, subclasses of FileSystemTarget can implement the private
+        method _open without type hints to not having to repeat the overload:s."""
         return self._open(mode=mode)
 
     def _open(self, mode: OpenMode):
