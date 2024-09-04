@@ -23,8 +23,10 @@ class IDHasherABC(Generic[ParameterT]):
 class IDHasher(IDHasherABC[ParameterT]):
     def __init__(self) -> NoneType:
         self._type_adapter: TypeAdapter | None = None
+        self.annotation: Type[Any] | None = None
 
     def init(self, annotation: Type[Any] | NoneType) -> Self:
+        self.annotation = annotation
         self._type_adapter = TypeAdapter(annotation)
         return self
 
@@ -42,6 +44,13 @@ class IDHasher(IDHasherABC[ParameterT]):
             raise ValueError("The init method has not been called.")
 
         return self._type_adapter
+
+    def __eq__(self, other: object) -> bool:
+        return (
+            isinstance(self, IDHasher)
+            and isinstance(other, IDHasher)
+            and self.annotation == other.annotation
+        )
 
 
 def _always_include(value: Any) -> bool:
