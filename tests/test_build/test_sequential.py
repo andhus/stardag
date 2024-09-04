@@ -7,7 +7,7 @@ from dcdag.core.utils.testing import TestTaskRoot, TestTaskRootLoadedT
 
 
 def test_build_simple_dag(
-    in_memory_default_targets: typing.Type[InMemoryFileSystemTarget],
+    default_in_memory_fs_target: typing.Type[InMemoryFileSystemTarget],
     simple_dag: TestTaskRoot,
     simple_dag_expected_root_output: TestTaskRootLoadedT,
 ):

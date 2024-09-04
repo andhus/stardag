@@ -47,18 +47,18 @@ class LoadableSaveableTarget(
 class InMemoryTarget(LoadableSaveableTarget[LoadedT]):
     """Useful in testing :)"""
 
-    key_to_target = {}  # Note class variable!
+    key_to_object = {}  # Note class variable!
 
     @classmethod
     def clear_targets(cls):
-        cls.key_to_target = {}
+        cls.key_to_object = {}
 
     @classmethod
     @contextmanager
     def cleared(cls):
         cls.clear_targets()
         try:
-            yield cls.key_to_target
+            yield cls.key_to_object
         finally:
             cls.clear_targets()
 
@@ -66,13 +66,13 @@ class InMemoryTarget(LoadableSaveableTarget[LoadedT]):
         self.key = key
 
     def exists(self):  # type: ignore
-        return self.key in self.key_to_target
+        return self.key in self.key_to_object
 
     def save(self, obj: LoadedT) -> None:
-        self.key_to_target[self.key] = obj
+        self.key_to_object[self.key] = obj
 
     def load(self) -> LoadedT:
-        return self.key_to_target[self.key]
+        return self.key_to_object[self.key]
 
 
 StreamT = typing.TypeVar("StreamT", bound=typing.Union[str, bytes])
@@ -84,8 +84,6 @@ StreamT_contra = typing.TypeVar(
 )
 
 OpenMode = typing.Literal["r", "w", "rb", "wb"]
-# TODO consider adding ["rb", "wb"] to OpenMode instead of upfront?
-# Yes, would be cleaner!
 
 
 @typing.runtime_checkable
@@ -157,7 +155,32 @@ class FileSystemTargetGeneric(
     def open(self, mode: OpenMode) -> FileSystemTargetHandle: ...
 
 
-class FileSystemTarget(FileSystemTargetGeneric[bytes]): ...
+class FileSystemTarget(FileSystemTargetGeneric[bytes]):
+    @typing.overload
+    def open(
+        self, mode: typing.Literal["r"]
+    ) -> ReadableFileSystemTargetHandle[str]: ...
+
+    @typing.overload
+    def open(
+        self, mode: typing.Literal["rb"]
+    ) -> ReadableFileSystemTargetHandle[bytes]: ...
+
+    @typing.overload
+    def open(
+        self, mode: typing.Literal["w"]
+    ) -> WritableFileSystemTargetHandle[str]: ...
+
+    @typing.overload
+    def open(
+        self, mode: typing.Literal["wb"]
+    ) -> WritableFileSystemTargetHandle[bytes]: ...
+
+    def open(self, mode: OpenMode) -> FileSystemTargetHandle:
+        return self._open(mode=mode)
+
+    def _open(self, mode: OpenMode):
+        raise NotImplementedError()
 
 
 class LoadableSaveableFileSystemTarget(
@@ -182,7 +205,7 @@ class LocalTarget(FileSystemTarget):
     def exists(self) -> bool:
         return self._path.exists()
 
-    def open(self, mode: OpenMode) -> FileSystemTargetHandle:  # type: ignore
+    def _open(self, mode: OpenMode) -> FileSystemTargetHandle:  # type: ignore
         if mode in ["r", "rb"]:
             return self._path.open(mode)
         if mode in ["w", "wb"]:
@@ -199,7 +222,7 @@ class InMemoryFileSystemTarget(FileSystemTarget):
 
     @classmethod
     def clear_targets(cls):
-        cls.path_to_target = {}
+        cls.path_to_bytes = {}
 
     @classmethod
     @contextmanager
@@ -216,7 +239,7 @@ class InMemoryFileSystemTarget(FileSystemTarget):
     def exists(self):  # type: ignore
         return self.path in self.path_to_bytes
 
-    def open(self, mode: OpenMode) -> FileSystemTargetHandle:  # type: ignore
+    def _open(self, mode: OpenMode) -> FileSystemTargetHandle:  # type: ignore
         if mode == "r":
             return _InMemoryStrReadableFileSystemTargetHandle(
                 self.path_to_bytes[self.path]

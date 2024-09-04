@@ -34,14 +34,21 @@ def default_local_target_tmp_path(
         yield default_root
 
 
+@pytest.fixture(scope="session")
+def default_in_memory_fs_target_prefix():
+    return "in-memory://"
+
+
 @pytest.fixture(scope="function")
-def in_memory_default_targets_target_factory() -> (
-    typing.Generator[TargetFactory, None, None]
-):
+def _default_in_memory_fs_target_factory(
+    default_in_memory_fs_target_prefix,
+) -> typing.Generator[TargetFactory, None, None]:
     with target_factory_provider.override(
         TargetFactory(
-            target_roots={"default": "in-memory://"},
-            target_class_by_prefix={"in-memory://": InMemoryFileSystemTarget},
+            target_roots={"default": default_in_memory_fs_target_prefix},
+            target_class_by_prefix={
+                default_in_memory_fs_target_prefix: InMemoryFileSystemTarget
+            },
         )
     ) as target_factory:
         with InMemoryFileSystemTarget.cleared():
@@ -49,7 +56,7 @@ def in_memory_default_targets_target_factory() -> (
 
 
 @pytest.fixture(scope="function")
-def in_memory_default_targets(
-    in_memory_default_targets_target_factory,
+def default_in_memory_fs_target(
+    _default_in_memory_fs_target_factory,
 ) -> typing.Type[InMemoryFileSystemTarget]:
     return InMemoryFileSystemTarget
