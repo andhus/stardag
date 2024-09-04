@@ -3,7 +3,7 @@ from __future__ import annotations
 import abc
 from abc import abstractmethod
 from types import NoneType
-from typing import Any, Callable, Generic, Self, Type, TypeVar
+from typing import Annotated, Any, Callable, Generic, Self, Type, TypeVar
 
 from pydantic import BaseModel, ConfigDict, TypeAdapter
 from pydantic.config import JsonDict, JsonValue
@@ -71,6 +71,10 @@ class IDHashInclude(IDHashIncludeABC):
 
 
 always_include = IDHashInclude(True)
+always_exclude = IDHashInclude(False)
+
+
+IDHashExclude = Annotated[ParameterT, always_exclude]
 
 
 class _ParameterConfig(BaseModel, Generic[ParameterT]):

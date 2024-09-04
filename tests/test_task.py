@@ -3,6 +3,7 @@ import typing
 from dcdag.core.fsttask import AutoFSTTask
 from dcdag.core.parameter import (
     IDHasher,
+    IDHashExclude,
     IDHashInclude,
     _ParameterConfig,
     always_include,
@@ -11,12 +12,7 @@ from dcdag.core.parameter import (
 
 class MockTask(AutoFSTTask[str]):
     a: int
-    b: typing.Annotated[str, IDHashInclude(False)]
-
-
-# class MockTask(AutoFSTTask[str]):
-#     a: int
-#     b: str = ParamField(significant=False)
+    b: IDHashExclude[str]
 
 
 def test_parameter():
