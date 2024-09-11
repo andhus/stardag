@@ -8,6 +8,7 @@ from dcdag.core.parameter import (
     _ParameterConfig,
     always_include,
 )
+from dcdag.core.task import TaskParam
 
 
 class MockTask(AutoFSTTask[str]):
@@ -25,3 +26,27 @@ def test_parameter():
             typing.Annotated[str, IDHashInclude(False)],  # type: ignore
         ),
     )
+
+
+def test_task_param():
+    class ChildTask(AutoFSTTask[str]):
+        a: str
+
+        def run(self) -> None:
+            return None
+
+    class ParentTask(AutoFSTTask[str]):
+        child: TaskParam[ChildTask]
+
+        def run(self) -> None:
+            return None
+
+    parent = ParentTask(child=ChildTask(a="A"))
+    assert parent.model_dump() == {
+        "version": None,
+        "child": {
+            "__task_family": "ChildTask",
+            "version": None,
+            "a": "A",
+        },
+    }
