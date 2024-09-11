@@ -190,6 +190,10 @@ class Task(BaseModel, Generic[TargetT]):
     def _id_hash_json(self) -> str:
         return _hash_safe_json_dumps(self._id_hash_jsonable())
 
+    def __hash__(self) -> int:
+        # TODO?
+        return hash(self.task_id)
+
 
 _TASK_FAMILY_KEY = "__task_family"
 

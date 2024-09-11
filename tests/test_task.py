@@ -28,19 +28,21 @@ def test_parameter():
     )
 
 
+class ChildTask(AutoFSTTask[str]):
+    a: str
+
+    def run(self) -> None:
+        return None
+
+
+class ParentTask(AutoFSTTask[str]):
+    child: TaskParam[ChildTask]
+
+    def run(self) -> None:
+        return None
+
+
 def test_task_param():
-    class ChildTask(AutoFSTTask[str]):
-        a: str
-
-        def run(self) -> None:
-            return None
-
-    class ParentTask(AutoFSTTask[str]):
-        child: TaskParam[ChildTask]
-
-        def run(self) -> None:
-            return None
-
     parent = ParentTask(child=ChildTask(a="A"))
     assert parent.model_dump() == {
         "version": None,
@@ -54,11 +56,40 @@ def test_task_param():
         "task_family": "ParentTask",
         "parameters": {
             "version": None,
-            "child": {
-                # TODO consider using just task_id?
-                "task_family": "ChildTask",
-                "version": None,
-                "task_id": parent.child.task_id,
-            },
+            "child": parent.child.task_id,
         },
     }
+
+
+class ParentTask2(AutoFSTTask[str]):
+    children: frozenset[TaskParam[ChildTask]]
+
+    def run(self) -> None:
+        return None
+
+
+def test_set_of_task_params():
+    parent = ParentTask2(children=frozenset([ChildTask(a="A"), ChildTask(a="B")]))
+    assert parent.model_dump(mode="json") == {
+        "version": None,
+        "children": [
+            {
+                "__task_family": "ChildTask",
+                "version": None,
+                "a": "A",
+            },
+            {
+                "__task_family": "ChildTask",
+                "version": None,
+                "a": "B",
+            },
+        ],
+    }
+    assert ParentTask2.model_validate_json(parent.model_dump_json()) == parent
+    # assert parent._id_hash_jsonable() == {
+    #     "task_family": "ParentTask2",
+    #     "parameters": {
+    #         "version": None,
+    #         "children": sorted([child.task_id for child in parent.children]),
+    #     },
+    # }
