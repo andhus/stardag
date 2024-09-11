@@ -67,8 +67,13 @@ class TaskSetHasher(IDHasherABC[typing.Set[Task]]):
         return sorted([child.task_id for child in value])
 
 
+_TaskT = typing.TypeVar("_TaskT", bound=Task)
+
+TaskSetParam = typing.Annotated[typing.FrozenSet[TaskParam[_TaskT]], TaskSetHasher()]
+
+
 class ParentTask2(AutoFSTTask[str]):
-    children: typing.Annotated[frozenset[TaskParam[ChildTask]], TaskSetHasher()]
+    children: TaskSetParam[ChildTask]
 
     def run(self) -> None:
         return None
