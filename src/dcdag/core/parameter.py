@@ -33,6 +33,7 @@ class IDHasher(IDHasherABC[ParameterT]):
         from dcdag.core.task import Task
 
         if isinstance(value, Task):
+            # TODO consider using just task_id?
             return value.id_ref.model_dump(mode="json")
 
         return self.type_adapter.dump_python(value, mode="json")

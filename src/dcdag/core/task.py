@@ -74,7 +74,7 @@ _REGISTER = _Register()
 class TaskIDRef(BaseModel):
     task_family: str
     version: str | None
-    id_hash: str
+    task_id: str
 
 
 class _Generic(Generic[TargetT]):
@@ -168,7 +168,7 @@ class Task(BaseModel, Generic[TargetT]):
         return TaskIDRef(
             task_family=self.get_task_family(),
             version=self.version,
-            id_hash=self.task_id,
+            task_id=self.task_id,
         )
 
     def run_version_checked(self):

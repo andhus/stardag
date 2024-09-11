@@ -50,3 +50,15 @@ def test_task_param():
             "a": "A",
         },
     }
+    assert parent._id_hash_jsonable() == {
+        "task_family": "ParentTask",
+        "parameters": {
+            "version": None,
+            "child": {
+                # TODO consider using just task_id?
+                "task_family": "ChildTask",
+                "version": None,
+                "task_id": parent.child.task_id,
+            },
+        },
+    }
