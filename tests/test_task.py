@@ -3,12 +3,13 @@ import typing
 from dcdag.core.fsttask import AutoFSTTask
 from dcdag.core.parameter import (
     IDHasher,
+    IDHasherABC,
     IDHashExclude,
     IDHashInclude,
     _ParameterConfig,
     always_include,
 )
-from dcdag.core.task import TaskParam
+from dcdag.core.task import Task, TaskParam
 
 
 class MockTask(AutoFSTTask[str]):
@@ -61,8 +62,13 @@ def test_task_param():
     }
 
 
+class TaskSetHasher(IDHasherABC[typing.Set[Task]]):
+    def __call__(self, value: typing.Set[Task]) -> typing.List[str]:  # type: ignore
+        return sorted([child.task_id for child in value])
+
+
 class ParentTask2(AutoFSTTask[str]):
-    children: frozenset[TaskParam[ChildTask]]
+    children: typing.Annotated[frozenset[TaskParam[ChildTask]], TaskSetHasher()]
 
     def run(self) -> None:
         return None
@@ -70,26 +76,26 @@ class ParentTask2(AutoFSTTask[str]):
 
 def test_set_of_task_params():
     parent = ParentTask2(children=frozenset([ChildTask(a="A"), ChildTask(a="B")]))
-    assert parent.model_dump(mode="json") == {
-        "version": None,
-        "children": [
-            {
-                "__task_family": "ChildTask",
-                "version": None,
-                "a": "A",
-            },
-            {
-                "__task_family": "ChildTask",
-                "version": None,
-                "a": "B",
-            },
-        ],
-    }
+    parent_dict = parent.model_dump(mode="json")
+    assert parent_dict.keys() == {"version", "children"}
+    assert parent_dict["version"] is None
+    assert sorted(parent_dict["children"], key=lambda x: x["a"]) == [
+        {
+            "__task_family": "ChildTask",
+            "version": None,
+            "a": "A",
+        },
+        {
+            "__task_family": "ChildTask",
+            "version": None,
+            "a": "B",
+        },
+    ]
     assert ParentTask2.model_validate_json(parent.model_dump_json()) == parent
-    # assert parent._id_hash_jsonable() == {
-    #     "task_family": "ParentTask2",
-    #     "parameters": {
-    #         "version": None,
-    #         "children": sorted([child.task_id for child in parent.children]),
-    #     },
-    # }
+    assert parent._id_hash_jsonable() == {
+        "task_family": "ParentTask2",
+        "parameters": {
+            "version": None,
+            "children": sorted([child.task_id for child in parent.children]),
+        },
+    }
