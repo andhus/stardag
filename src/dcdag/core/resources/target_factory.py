@@ -59,7 +59,7 @@ class TargetFactory:
     def get_target(
         self,
         relpath: str,
-        task: Task,  # noqa
+        task: Task | None,  # noqa
         target_root_key: str = _DEFAULT_TARGET_ROOT_KEY,
     ) -> FileSystemTarget:
         """Get a file system target.

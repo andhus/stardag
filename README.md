@@ -13,6 +13,15 @@ Where luigi came short:
 - As an SDK -> Composabillity! Solved by allowing assets(/tasks) as inputs(/parameters).
 - Orchestration and execution: Made no attempt at infra... Scheduler ran slow.
 
+Adds:
+
+- Opinionated Best practices build in (minimal boilerplate)
+- yet fully tweakable
+- modern complete type hints
+- execution framework agnostic
+- async tasks
+- in memory caching
+
 Comparison
 
 Dagster: has assets but the are not generally parametrizable
@@ -97,3 +106,25 @@ Class Dowstream(Task[…]):
 task: TaskParam[TGT[pd.DataFrame]]
 
 FST[PydanticModel, JSONStr]
+
+## Functional API
+
+```python
+
+@task
+def df_transform(
+      param_a: int,
+      df: Depends[pd.DataFrame],
+) -> pd.DataFrame:
+      return df * param_a
+
+root_task = df_transform.init(param_a=2, df=get_df.init(url=""))
+
+@compose
+def dag(
+    param_a,
+    url,
+):
+    return df_transform(param_a=param_a, df=get_df(url))
+
+```

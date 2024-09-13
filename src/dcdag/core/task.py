@@ -1,15 +1,15 @@
 import json
-import warnings
 from abc import abstractmethod
 from functools import cached_property
 from hashlib import sha1
 from typing import (
     TYPE_CHECKING,
-    Annotated,
     Any,
     ClassVar,
     Dict,
     Generic,
+    Mapping,
+    Sequence,
     Tuple,
     Type,
     TypeVar,
@@ -18,16 +18,17 @@ from typing import (
 from pydantic import (
     BaseModel,
     Field,
-    PlainSerializer,
-    ValidationError,
-    ValidationInfo,
-    ValidatorFunctionWrapHandler,
-    WithJsonSchema,
-    WrapValidator,
 )
+from pydantic.fields import FieldInfo
 from typing_extensions import List, TypeAlias, Union
 
-from dcdag.core.parameter import _ParameterConfig
+from dcdag.core.parameter import (
+    IDHasher,
+    IDHasherABC,
+    IDHashInclude,
+    IDHashIncludeABC,
+    _ParameterConfig,
+)
 from dcdag.core.target import Target
 
 TargetT = TypeVar("TargetT", bound=Union[Target, None], covariant=True)
@@ -39,7 +40,7 @@ TaskStruct: TypeAlias = Union["Task", List["TaskStruct"], Dict[str, "TaskStruct"
 # purposes and dev UX - it allows for grouping and labeling of the incoming "edges"
 # in the DAG.
 TaskDeps: TypeAlias = Union[
-    None, "Task", List["Task"], Dict[str, "Task"], Dict[str, List["Task"]]
+    None, "Task", Sequence["Task"], Mapping[str, "Task"], Mapping[str, Sequence["Task"]]
 ]
 
 
@@ -65,7 +66,7 @@ _REGISTER = _Register()
 class TaskIDRef(BaseModel):
     task_family: str
     version: str | None
-    id_hash: str
+    task_id: str
 
 
 class _Generic(Generic[TargetT]):
@@ -87,14 +88,30 @@ class Task(BaseModel, Generic[TargetT]):
     def __pydantic_init_subclass__(cls, **kwargs: Any) -> None:
         super().__pydantic_init_subclass__(**kwargs)
         _REGISTER.add(cls)
+
+        def get_one(field_info: FieldInfo, class_or_tuple, default_factory):
+            matches = [
+                value
+                for value in field_info.metadata
+                if isinstance(value, class_or_tuple)
+            ]
+            if len(matches) > 1:
+                raise ValueError(f"Multiple {class_or_tuple} found in metadata.")
+            if len(matches) == 1:
+                return matches[0]
+
+            return default_factory()
+
+        def get_parameter_config(field_info: FieldInfo):
+            id_hasher = get_one(field_info, IDHasherABC, IDHasher)
+            id_hash_include = get_one(field_info, IDHashIncludeABC, IDHashInclude)
+            return _ParameterConfig(
+                id_hasher=id_hasher,
+                id_hash_include=id_hash_include,
+            ).init(annotation=field_info.rebuild_annotation())
+
         cls._param_configs = {
-            name: (
-                field_info.json_schema_extra.init(
-                    annotation=field_info.rebuild_annotation()
-                )
-                if isinstance(field_info.json_schema_extra, _ParameterConfig)
-                else _ParameterConfig().init(annotation=field_info.rebuild_annotation())
-            )
+            name: get_parameter_config(field_info)
             for name, field_info in cls.model_fields.items()
         }
         # TODO automatically set version default to __version__.
@@ -143,7 +160,7 @@ class Task(BaseModel, Generic[TargetT]):
         return TaskIDRef(
             task_family=self.get_task_family(),
             version=self.version,
-            id_hash=self.task_id,
+            task_id=self.task_id,
         )
 
     def run_version_checked(self):
@@ -165,95 +182,9 @@ class Task(BaseModel, Generic[TargetT]):
     def _id_hash_json(self) -> str:
         return _hash_safe_json_dumps(self._id_hash_jsonable())
 
-
-_TASK_FAMILY_KEY = "__task_family"
-
-
-def _get_task_param_validate(annotation):
-    def _task_param_validate(
-        x: Any,
-        handler: ValidatorFunctionWrapHandler,
-        info: ValidationInfo,
-    ) -> Task:
-        if isinstance(x, dict):
-            if _TASK_FAMILY_KEY not in x:
-                raise ValueError(
-                    f"Task parameter dict must have a '{_TASK_FAMILY_KEY}' key."
-                )
-
-            instance = _REGISTER.get(x[_TASK_FAMILY_KEY])(
-                **{key: value for key, value in x.items() if key != _TASK_FAMILY_KEY}
-            )
-        elif isinstance(x, Task):
-            instance = x
-        else:
-            raise ValueError(f"Invalid task parameter type: {type(x)}")
-
-        try:
-            return handler(instance)
-        except ValidationError:
-            # print(
-            #     f"Error in task parameter validation: {e}"
-            #     f"\nAnnotation: {annotation}"
-            # )
-            # check that the annotation is correct
-            if not isinstance(instance, Task):
-                raise ValueError(
-                    f"Task parameter must be of type {Task}, got {type(instance)}."
-                )
-
-            meta: dict = annotation.__pydantic_generic_metadata__
-            origin = meta.get("origin")
-            if not origin == Task:  # TODO subclass check?
-                raise ValueError(
-                    f"Task parameter must be of type {Task}, got {origin}."
-                )
-
-            (target_t,) = meta.get("args", (Any,))
-
-            if target_t is not Any:
-                # TODO check must be loosened and improved, check libs...
-                if not instance.output.__annotations__["return"] == target_t:
-                    warnings.warn(
-                        "Could not verify task parameter type compatibility."
-                        f"Input Task.output() must be compatible with {target_t}, "
-                        f"got {instance.output.__annotations__['return']}."
-                    )
-
-        return instance
-
-    return _task_param_validate
-
-
-_TaskT = TypeVar("_TaskT", bound=Task)
-
-
-# See: https://github.com/pydantic/pydantic/issues/8202#issuecomment-2264669699
-class _TaskParam:
-    def __class_getitem__(cls, item):
-        return Annotated[
-            item,
-            WrapValidator(_get_task_param_validate(item)),
-            PlainSerializer(
-                lambda x: {**x.model_dump(), _TASK_FAMILY_KEY: x.get_task_family()}
-            ),
-            WithJsonSchema(
-                {
-                    "type": "object",
-                    "properties": {
-                        _TASK_FAMILY_KEY: {"type": "string"},
-                    },
-                    "additionalProperties": True,
-                },
-                mode="serialization",
-            ),
-        ]
-
-
-if TYPE_CHECKING:
-    TaskParam: TypeAlias = Annotated[_TaskT, "task_param"]  # TODO?
-else:
-    TaskParam = _TaskParam
+    def __hash__(self) -> int:
+        # TODO?
+        return hash(self.task_id)
 
 
 def _hash_safe_json_dumps(obj):

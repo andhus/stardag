@@ -10,7 +10,7 @@ target_factory_provider = resource_provider(
 
 def get_target(
     relpath: str,
-    task: Task,
+    task: Task | None,
     target_root_key: str = _DEFAULT_TARGET_ROOT_KEY,
 ) -> FileSystemTarget:
     return target_factory_provider.get().get_target(

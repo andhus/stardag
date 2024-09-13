@@ -1,9 +1,10 @@
 import json
+import typing
 
 from pydantic import BaseModel
 
 from dcdag.core.fsttask import AutoFSTTask
-from dcdag.core.parameter import ParamField
+from dcdag.core.parameter import IDHashInclude
 from dcdag.core.resources import target_factory_provider
 from dcdag.core.resources.target_factory import TargetFactory
 from dcdag.core.target import (
@@ -14,7 +15,8 @@ from dcdag.core.target import (
     LoadableTarget,
     Serializable,
 )
-from dcdag.core.task import Task, TaskParam
+from dcdag.core.task import Task
+from dcdag.core.task_parameter import TaskParam
 
 
 class TestModel(BaseModel):
@@ -34,11 +36,7 @@ class SubTask(Task[LoadableTarget[int]]):
 class MyTask(Task[LoadableTarget[str]]):
     a: int
     b: str
-    c: str = ParamField(
-        "C",
-        significant=False,
-        # id_hash_include=lambda x: x != "C",
-    )
+    c: typing.Annotated[str, IDHashInclude(False)] = "C"
     model: TestModel = TestModel()
     sub_task: TaskParam[Task[LoadableTarget[int]]]
     sub_task_2: TaskParam[SubTask]
