@@ -8,20 +8,31 @@ from dcdag.core.task import Task
 from dcdag.core.task_parameter import TaskLoads
 
 LoadedT = typing.TypeVar("LoadedT")
+FuncT = typing.TypeVar("FuncT", bound=typing.Callable)
+
+_PWrapped = typing.ParamSpec("_PWrapped")
 
 
-class FunctionTask(AutoFSTTask[LoadedT], typing.Generic[LoadedT]):
-    _func: typing.Callable
+class FunctionTask(AutoFSTTask[LoadedT], typing.Generic[LoadedT, _PWrapped]):
+    _func: typing.Callable[_PWrapped, LoadedT]
+
+    if typing.TYPE_CHECKING:
+
+        def __init__(
+            # self, *args: _PWrapped.args, **kwargs: _PWrapped.kwargs
+            self,
+            **kwargs: typing.Any,
+        ) -> None: ...
 
     @classmethod
-    def call(cls, *args, **kwds):
-        return cls._func(*args, **kwds)
+    def call(cls, *args: _PWrapped.args, **kwargs: _PWrapped.kwargs) -> LoadedT:
+        return cls._func(*args, **kwargs)  # type: ignore
 
     def run(self) -> None:
-        result = self.__class__._func(**self._get_inputs())
+        result = self.call(**self._get_inputs())  # type: ignore
         self.output().save(result)
 
-    def _get_inputs(self):
+    def _get_inputs(self) -> _PWrapped.kwargs:  # type: ignore
         def get_input(name):
             value = getattr(self, name)
             if isinstance(value, Task):
@@ -38,7 +49,9 @@ class FunctionTask(AutoFSTTask[LoadedT], typing.Generic[LoadedT]):
         return self.output().load()
 
 
-def task(func):
+def task(
+    func: typing.Callable[_PWrapped, LoadedT],
+) -> typing.Type[FunctionTask[LoadedT, _PWrapped]]:
     """Decorator to turn a function into a task."""
     # get the function signature
     sig = inspect.signature(func)
@@ -56,7 +69,7 @@ def task(func):
 
     task_class = create_model(
         func.__name__,
-        __base__=FunctionTask[return_type],
+        __base__=FunctionTask[LoadedT, _PWrapped],
         __module__=func.__module__,
         **{  # type: ignore
             name: (
@@ -69,8 +82,3 @@ def task(func):
     task_class._func = func
 
     return task_class
-
-
-@task
-def add(a: int, b: int) -> int:
-    return a + b
