@@ -10,6 +10,7 @@ from pydantic import (
     WrapValidator,
 )
 
+from dcdag.core.parameter import IDHasherABC
 from dcdag.core.target import LoadableTarget
 from dcdag.core.task import _REGISTER, Task
 
@@ -117,3 +118,11 @@ if typing.TYPE_CHECKING:
     ]
 else:
     TaskLoads = _TaskLoads
+
+
+class TaskSetHasher(IDHasherABC[typing.Set[Task]]):
+    def __call__(self, value: typing.Set[Task]) -> typing.List[str]:  # type: ignore
+        return sorted([child.task_id for child in value])
+
+
+TaskSet = typing.Annotated[typing.FrozenSet[TaskParam[_TaskT]], TaskSetHasher()]
