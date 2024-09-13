@@ -41,8 +41,8 @@ Main idea
 
 - [x] Rename back to `Task` and `task_id`
 - [x] Move `.load()` to Target (!) -> Generic only in target, See Notes!
-- [x] Add `context` to output, run, requires
-- [ ] Use annotation instead of json_schema-hack to pass extra info about parameters
+- [ ] ~~Add `context` to output, run, requires~~
+- [x] Use annotation instead of json_schema-hack to pass extra info about parameters
 - [ ] basic unit testing
 - [ ] Basic heuristic for run-time type checking of Generic type in TaskParams
 - [ ] Express dynamic deps explicitly (Generic: Task[TargetT, RunT], StaticTask, -> NO just type annotate as union in base class.
@@ -54,12 +54,14 @@ Main idea
 
 - [ ] FileSystemTargets (luigi style or alternative?)
 - [ ] Serialization, based on type annotation of task target?
--
+- [x] function decorator API - PoC
 
 ### Execution
 
-- [ ] Luigi runner
+- [ ] Basic sequential
+- [ ] Luigi runner?
 - [ ] Prefect runner
+- [ ] Modal runner ("depolyment")
 
 ## Notes
 

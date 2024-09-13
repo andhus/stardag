@@ -15,10 +15,7 @@ from typing import (
     TypeVar,
 )
 
-from pydantic import (
-    BaseModel,
-    Field,
-)
+from pydantic import BaseModel, Field
 from pydantic.fields import FieldInfo
 from typing_extensions import List, TypeAlias, Union
 
@@ -123,7 +120,8 @@ class Task(BaseModel, Generic[TargetT]):
         https://github.com/pydantic/pydantic/discussions/4904#discussioncomment-4592052
         """
         create_model = super().__class_getitem__(params)  # type: ignore
-
+        if isinstance(params, tuple):
+            params = params[0]
         create_model.__orig_class__ = _Generic[params]  # type: ignore
         return create_model
 
