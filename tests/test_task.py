@@ -9,7 +9,8 @@ from dcdag.core.parameter import (
     _ParameterConfig,
     always_include,
 )
-from dcdag.core.task import Task, TaskParam
+from dcdag.core.task import Task
+from dcdag.core.task_parameter import TaskLoads, TaskParam
 
 
 class MockTask(AutoFSTTask[str]):
@@ -104,3 +105,14 @@ def test_set_of_task_params():
             "children": sorted([child.task_id for child in parent.children]),
         },
     }
+
+
+class ParentTask3(AutoFSTTask[str]):
+    child: TaskLoads[str]
+
+    def run(self) -> None:
+        return None
+
+
+def test_task_loads():
+    parent = ParentTask3(child=ChildTask(a="A"))  # noqa

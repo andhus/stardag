@@ -15,7 +15,8 @@ from dcdag.core.target import (
     LoadableTarget,
     Serializable,
 )
-from dcdag.core.task import Task, TaskParam
+from dcdag.core.task import Task
+from dcdag.core.task_parameter import TaskParam
 
 
 class TestModel(BaseModel):
