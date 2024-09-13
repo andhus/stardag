@@ -19,14 +19,26 @@ class FunctionTask(AutoFSTTask[LoadedT], typing.Generic[LoadedT, _PWrapped]):
     if typing.TYPE_CHECKING:
 
         def __init__(
-            # self, *args: _PWrapped.args, **kwargs: _PWrapped.kwargs
             self,
+            # TODO not really possible to type hint this (?) :/ Below would only allow
+            # the same signature as the function, not TaskLoads[<type>]
+            #    *args: _PWrapped.args, **kwargs: _PWrapped.kwargs
+            # and if the user is forced to type hit the function with
+            # <type> | TaskLoads[<type>], then it doesn't make sense inside the function
             **kwargs: typing.Any,
         ) -> None: ...
 
     @classmethod
     def call(cls, *args: _PWrapped.args, **kwargs: _PWrapped.kwargs) -> LoadedT:
         return cls._func(*args, **kwargs)  # type: ignore
+
+    def requires(self) -> typing.Mapping[str, Task] | None:
+        requires = {
+            name: getattr(self, name)
+            for name in self.model_fields.keys()
+            if isinstance(getattr(self, name), Task)
+        }
+        return requires or None
 
     def run(self) -> None:
         result = self.call(**self._get_inputs())  # type: ignore
@@ -53,17 +65,12 @@ def task(
     func: typing.Callable[_PWrapped, LoadedT],
 ) -> typing.Type[FunctionTask[LoadedT, _PWrapped]]:
     """Decorator to turn a function into a task."""
-    # get the function signature
-    sig = inspect.signature(func)
-    # get the function return type
-    return_type = sig.return_annotation
+
+    signature = inspect.signature(func)
+    return_type = signature.return_annotation
     if return_type == inspect.Parameter.empty:
         raise ValueError("Return type must be annotated")
-
-    # get the function arguments
-    args = sig.parameters
-    # create the model
-    # TODO
+    args = signature.parameters
     if any(arg.annotation == inspect.Parameter.empty for arg in args.values()):
         raise ValueError("All arguments must have annotations")
 

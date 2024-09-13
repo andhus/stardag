@@ -222,14 +222,18 @@ class InMemoryFileSystemTarget(FileSystemTarget):
         return self.path in self.path_to_bytes
 
     def _open(self, mode: OpenMode) -> FileSystemTargetHandle:  # type: ignore
-        if mode == "r":
-            return _InMemoryStrReadableFileSystemTargetHandle(
-                self.path_to_bytes[self.path]
-            )
-        if mode == "rb":
-            return _InMemoryBytesReadableFileSystemTargetHandle(
-                self.path_to_bytes[self.path]
-            )
+        try:
+            if mode == "r":
+                return _InMemoryStrReadableFileSystemTargetHandle(
+                    self.path_to_bytes[self.path]
+                )
+            if mode == "rb":
+                return _InMemoryBytesReadableFileSystemTargetHandle(
+                    self.path_to_bytes[self.path]
+                )
+        except KeyError:
+            raise FileNotFoundError(f"No such file: {self.path}")
+
         if mode == "w":
             return _InMemoryStrWritableFileSystemTargetHandle(self.path)
         if mode == "wb":
