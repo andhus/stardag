@@ -1,3 +1,4 @@
+import pickle
 import typing
 from contextlib import contextmanager
 from io import BytesIO, StringIO
@@ -381,3 +382,11 @@ class JSONSerializer(Serializer[LoadedT]):
 
     def load(self, handle: ReadableFileSystemTargetHandle[bytes]) -> LoadedT:
         return self.type_adapter.validate_json(handle.read())
+
+
+class PickleSerializer(Serializer[LoadedT]):
+    def dump(self, obj: LoadedT, handle: WritableFileSystemTargetHandle[bytes]) -> None:
+        pickle.dump(obj, handle)
+
+    def load(self, handle: ReadableFileSystemTargetHandle[bytes]) -> LoadedT:
+        return pickle.loads(handle.read())
