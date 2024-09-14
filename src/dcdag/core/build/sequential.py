@@ -1,4 +1,4 @@
-from dcdag.core.task import Task
+from dcdag.core.task import Task, TaskDeps
 
 
 def build(task: Task, completion_cache: set[str] | None = None) -> None:
@@ -26,10 +26,15 @@ def _is_complete(task: Task, completion_cache: set[str]) -> bool:
     return False
 
 
-def _flatten(requires_tasks) -> list[Task]:
-    # TODO general case!
-    if requires_tasks is None:
+def _flatten(requires_output: TaskDeps) -> list[Task]:
+    if requires_output is None:
         return []
-    if isinstance(requires_tasks, Task):
-        return [requires_tasks]
-    return requires_tasks
+    if isinstance(requires_output, Task):
+        return [requires_output]
+    if isinstance(requires_output, (list, tuple)):
+        return sum([_flatten(task) for task in requires_output], [])
+
+    if isinstance(requires_output, dict):
+        return sum([_flatten(task) for task in requires_output.values()], [])
+
+    raise ValueError(f"Unsupported requires_output type: {requires_output!r}")
