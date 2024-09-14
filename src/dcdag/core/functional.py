@@ -90,6 +90,7 @@ def task(
     *,
     version: str = "0",
     relpath_base: str | None = None,
+    # TODO remaining kwargs!
 ) -> typing.Type[FunctionTask[LoadedT, _PWrapped]] | _TaskWrapper:
     def wrapper(
         _func: typing.Callable[_PWrapped, LoadedT],
