@@ -68,11 +68,15 @@ class _TaskWrapper(typing.Protocol):
     ) -> typing.Type[FunctionTask[LoadedT, _PWrapped]]: ...
 
 
+_Relpath = str | typing.Callable[[AutoFSTTask[LoadedT]], str] | None
+
+
 @typing.overload
 def task(
     _func: typing.Callable[_PWrapped, LoadedT],
     *,
     version: str = "0",
+    relpath: _Relpath = None,
     relpath_base: str | None = None,
 ) -> typing.Type[FunctionTask[LoadedT, _PWrapped]]: ...
 
@@ -81,6 +85,7 @@ def task(
 def task(
     *,
     version: str = "0",
+    relpath: _Relpath = None,
     relpath_base: str | None = None,
 ) -> _TaskWrapper: ...
 
@@ -89,6 +94,7 @@ def task(
     _func: typing.Callable[_PWrapped, LoadedT] | None = None,
     *,
     version: str = "0",
+    relpath: _Relpath = None,
     relpath_base: str | None = None,
     # TODO remaining kwargs!
 ) -> typing.Type[FunctionTask[LoadedT, _PWrapped]] | _TaskWrapper:
@@ -107,12 +113,12 @@ def task(
 
         task_class = create_model(
             _func.__name__,
-            __base__=FunctionTask[LoadedT, _PWrapped],
+            __base__=FunctionTask[return_type, _PWrapped],
             __module__=_func.__module__,
             version=(str | None, version),
             **{  # type: ignore
                 name: (
-                    arg.annotation | TaskLoads[arg.annotation],
+                    _get_param_annotation(arg.annotation),
                     arg.default if arg.default != inspect.Parameter.empty else ...,
                 )
                 for name, arg in args.items()
@@ -122,7 +128,15 @@ def task(
         task_class.__version__ = "0"
 
         # extra properties
-        task_class._relpath_base = relpath_base
+        if relpath:
+            if callable(relpath):
+                task_class._relpath = property(relpath)
+            else:
+                assert isinstance(relpath, str)
+                task_class._relpath = relpath
+
+        if relpath_base:
+            task_class._relpath_base = relpath_base
 
         return task_class
 
@@ -130,3 +144,25 @@ def task(
         return wrapper  # type: ignore
 
     return wrapper(_func)
+
+
+_DependsT = typing.TypeVar("_DependsT")
+
+
+class _DependsOnMarker:
+    pass
+
+
+Depends = typing.Annotated[_DependsT, _DependsOnMarker]
+
+
+def _get_param_annotation(func_annotation: typing.Any) -> typing.Any:
+    args = typing.get_args(func_annotation)
+    if _DependsOnMarker in args:
+        stripped_args = tuple(arg for arg in args if arg != _DependsOnMarker)
+        if len(stripped_args) > 1:
+            stripped_annotation = typing.Annotated[*stripped_args]  # type: ignore
+        else:
+            stripped_annotation = stripped_args[0]  # type: ignore
+        return TaskLoads[stripped_annotation]
+    return func_annotation | TaskLoads[func_annotation]
