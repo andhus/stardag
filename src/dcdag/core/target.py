@@ -338,6 +338,10 @@ class Serializable(
         self.serializer = serializer
         self.wrapped = wrapped
 
+    @property
+    def path(self) -> str:  # type: ignore
+        return self.wrapped.path
+
     def load(self) -> LoadedT:
         with self.open("rb") as handle:
             return self.serializer.load(handle)  # type: ignore  # TODO?

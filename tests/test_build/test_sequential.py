@@ -13,7 +13,7 @@ def test_build_simple_dag(
 ):
     sequential.build(simple_dag)
     assert simple_dag.output().load() == simple_dag_expected_root_output
-    expected_root_path = f"in-memory://{simple_dag.relpath}"
+    expected_root_path = f"in-memory://{simple_dag._relpath}"
     assert (
         InMemoryFileSystemTarget.path_to_bytes[expected_root_path]
         == json.dumps(simple_dag_expected_root_output, separators=(",", ":")).encode()

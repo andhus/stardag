@@ -39,7 +39,7 @@ class ExamplesMLPipelineBase(AutoFSTTask[LoadedT], typing.Generic[LoadedT]):
     version: str | None = __version__
 
     @property
-    def relpath_base(self) -> str:
+    def _relpath_base(self) -> str:
         return "examples/ml_pipeline"
 
 
@@ -54,9 +54,9 @@ class Dump(ExamplesMLPipelineBase[pd.DataFrame]):
     )
 
     @property
-    def relpath(self) -> str:
+    def _relpath(self) -> str:
         return (
-            f"{self.relpath_base}/DumpData/v{self.version}/{self.date}/"
+            f"{self._relpath_base}/DumpData/v{self.version}/{self.date}/"
             f"{self.snapshot_slug}.csv"  # TODO extension and format
         )
 

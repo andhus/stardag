@@ -19,31 +19,31 @@ class AutoFSTTask(
     typing.Generic[LoadedT],
 ):
     @property
-    def relpath_base(self) -> str:
+    def _relpath_base(self) -> str:
         return ""
 
     @property
-    def relpath_extra(self) -> str:
+    def _relpath_extra(self) -> str:
         return ""
 
     @property
-    def relpath_filename(self) -> str:
+    def _relpath_filename(self) -> str:
         return ""
 
     @property
-    def relpath(self) -> str:
+    def _relpath(self) -> str:
         return "/".join(
             [
                 part
                 for part in [
-                    self.relpath_base,
+                    self._relpath_base,
                     self.get_task_family(),
                     f"v{self.version}" if self.version else "",
-                    self.relpath_extra,
+                    self._relpath_extra,
                     self.task_id[:2],
                     self.task_id[2:4],
                     self.task_id,
-                    self.relpath_filename,
+                    self._relpath_filename,
                 ]
                 if part
             ]
@@ -59,6 +59,6 @@ class AutoFSTTask(
             serializer = PickleSerializer[loaded_t]()
 
         return Serializable(
-            wrapped=get_target(self.relpath, task=self),
+            wrapped=get_target(self._relpath, task=self),
             serializer=serializer,
         )
