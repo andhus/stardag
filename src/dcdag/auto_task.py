@@ -1,11 +1,8 @@
 import typing
 
-
 from dcdag.resources import get_target
 from dcdag.target import LoadableSaveableFileSystemTarget, Serializable
-from dcdag.target.serialize import (
-    get_serializer,
-)
+from dcdag.target.serialize import get_serializer
 from dcdag.task import Task
 
 LoadedT = typing.TypeVar("LoadedT")
@@ -36,8 +33,21 @@ class AutoFSTTask(
         return ""
 
     @property
+    def _relpath_extension(self) -> str:
+        get_default_ext = getattr(
+            self._serializer, "get_default_extension", lambda: None
+        )
+        assert callable(get_default_ext)
+        default_ext = get_default_ext()
+        if default_ext is None:
+            return ""
+
+        assert isinstance(default_ext, str)
+        return default_ext
+
+    @property
     def _relpath(self) -> str:
-        return "/".join(
+        relpath = "/".join(
             [
                 part
                 for part in [
@@ -53,6 +63,11 @@ class AutoFSTTask(
                 if part
             ]
         )
+        extension = self._relpath_extension
+        if extension:
+            relpath = f"{relpath}.{extension.lstrip('.')}"
+
+        return relpath
 
     def output(self) -> LoadableSaveableFileSystemTarget[LoadedT]:
         return Serializable(

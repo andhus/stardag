@@ -114,6 +114,9 @@ class JSONSerializer(Serializer[LoadedT]):
         with target.open("rb") as handle:
             return self.type_adapter.validate_json(handle.read())
 
+    def get_default_extension(self) -> str:
+        return "json"
+
 
 class PickleSerializer(Serializer[LoadedT]):
     @classmethod
@@ -132,6 +135,9 @@ class PickleSerializer(Serializer[LoadedT]):
     def load(self, target: FileSystemTarget) -> LoadedT:
         with target.open("rb") as handle:
             return pickle.loads(handle.read())
+
+    def get_default_extension(self) -> str:
+        return "pkl"
 
 
 class PandasDataFrameCSVSerializer(Serializer[DataFrame]):
@@ -159,6 +165,9 @@ class PandasDataFrameCSVSerializer(Serializer[DataFrame]):
     def load(self, target: FileSystemTarget) -> DataFrame:
         with target.open("r") as handle:
             return pd_read_csv(handle, index_col=0)  # type: ignore
+
+    def get_default_extension(self) -> str:
+        return "csv"
 
 
 @typing.runtime_checkable
@@ -195,6 +204,9 @@ class SelfSerializer(Serializer[SelfSerializing]):
 
     def load(self, target: FileSystemTarget) -> SelfSerializing:
         return self.class_.load(target)
+
+    def get_default_extension(self) -> str | None:
+        return getattr(self.class_, "default_serialized_extension", None)
 
 
 def strip_annotation(annotation: typing.Type[LoadedT]) -> typing.Type[LoadedT]:
