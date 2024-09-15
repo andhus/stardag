@@ -2,6 +2,7 @@ import json
 from abc import abstractmethod
 from functools import cached_property
 from hashlib import sha1
+from os import name
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -43,21 +44,50 @@ TaskDeps: TypeAlias = Union[
 
 class _Register:
     def __init__(self):
-        self._family_to_class: dict[str, Type["Task"]] = {}
+        self._namespace_family_to_class: dict[str, Type["Task"]] = {}
+        self._module_to_namespace: dict[str, str] = {}
 
     def add(self, task_class: Type["Task"]):
         # TODO support luigi style name spacing
-        if self._family_to_class.get(task_class.get_task_family()):
+        namespace_family = self.get_namespace_family(task_class)
+
+        if self._namespace_family_to_class.get(namespace_family):
             raise ValueError(
                 f"Task family name {task_class.get_task_family()} already registered."
             )
-        self._family_to_class[task_class.get_task_family()] = task_class
+        self._namespace_family_to_class[namespace_family] = task_class
 
     def get(self, task_family: str) -> Type["Task"]:
-        return self._family_to_class[task_family]
+        return self._namespace_family_to_class[task_family]
+
+    def add_module_namespace(self, module: str, namespace: str):
+        self._module_to_namespace[module] = namespace
+
+    def get_namespace_family(self, task_class: Type["Task"]) -> str:
+        namespace = self._module_to_namespace.get(task_class.__module__)
+        if namespace:
+            return f"{namespace}.{task_class.get_task_family()}"
+        return task_class.get_task_family()
 
 
 _REGISTER = _Register()
+
+
+def auto_namespace(scope: str):
+    """Set the task namespace for the module to the module import path.
+
+    Usage:
+    ```python
+    from dcdag.task import auto_namespace
+
+    auto_namespace(__name__)
+
+    class MyTask(Task):
+        ...
+    ```
+    """
+    module = scope.rstrip(".")
+    _REGISTER.add_module_namespace(module, module)
 
 
 class TaskIDRef(BaseModel):
