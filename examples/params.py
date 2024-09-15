@@ -3,7 +3,7 @@ import typing
 
 from pydantic import BaseModel
 
-from dcdag.core.fsttask import AutoFSTTask
+from dcdag.core.auto_task import AutoFSTTask
 from dcdag.core.parameter import IDHashInclude
 from dcdag.core.resources import target_factory_provider
 from dcdag.core.resources.target_factory import TargetFactory

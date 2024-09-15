@@ -1,4 +1,4 @@
-from dcdag.core.fsttask import AutoFSTTask
+from dcdag.core.auto_task import AutoFSTTask
 from dcdag.core.task_parameter import TaskLoads, TaskParam, TaskSet
 
 
