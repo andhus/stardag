@@ -12,7 +12,10 @@ from traitlets import Any
 
 from dcdag.auto_task import AutoFSTTask
 from dcdag.build.sequential import build as build_sequential
-from dcdag.examples.ml_pipeline.base import (
+from dcdag.target import LoadedT
+from dcdag.task_parameter import TaskLoads
+
+from .base import (
     DatasetFilter,
     DecisionTreeHyperParameters,
     HyperParameters,
@@ -28,8 +31,6 @@ from dcdag.examples.ml_pipeline.base import (
     train_model,
     utc_today,
 )
-from dcdag.target import LoadedT
-from dcdag.task_parameter import TaskLoads
 
 logger = logging.getLogger(__name__)
 

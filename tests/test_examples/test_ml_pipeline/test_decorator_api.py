@@ -1,8 +1,9 @@
 from dcdag.build.sequential import build as build_sequential
-from dcdag.examples.ml_pipeline.decorator_api import get_metrics_dag
 
 
-def test_build_metrics_dag(default_in_memory_fs_target):
+def test_build_metrics_dag(default_in_memory_fs_target, examples_in_sys_path):
+    from ml_pipeline.decorator_api import get_metrics_dag  # type: ignore
+
     metrics = get_metrics_dag()
     build_sequential(metrics)
     assert metrics.complete()

@@ -10,7 +10,8 @@ import pandas as pd
 
 from dcdag.build.sequential import build as build_sequential
 from dcdag.decorator import Depends, task
-from dcdag.examples.ml_pipeline.base import (
+
+from .base import (
     DatasetFilter,
     HyperParameters,
     LogisticRegressionHyperParameters,
