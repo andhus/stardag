@@ -1,6 +1,6 @@
 import pytest
 
-from dcdag.core.functional import Depends, task
+from dcdag.core.decorator import Depends, task
 from dcdag.core.target import LoadableTarget
 from dcdag.core.task import Task
 
