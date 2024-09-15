@@ -144,7 +144,7 @@ class PandasDataFrameCSVSerializer(Serializer[DataFrame]):
 
     @classmethod
     def type_checked_init(cls, annotation: typing.Type[DataFrame]) -> typing.Self:
-        if annotation != DataFrame or typing.get_origin(annotation) != DataFrame:
+        if strip_annotation(annotation) != DataFrame:
             raise ValueError(f"{annotation} must be DataFrame.")
         return cls()
 
@@ -173,14 +173,7 @@ class SelfSerializer(Serializer[SelfSerializing]):
 
     @classmethod
     def type_checked_init(cls, annotation: typing.Type[SelfSerializing]) -> typing.Self:
-        origin = typing.get_origin(annotation)
-        if origin is None:
-            return cls(annotation)
-
-        if origin != typing.Annotated:
-            return cls(typing.get_args(annotation)[0])
-
-        raise ValueError(f"Annotation must be SelfSerializing, got {annotation}.")
+        return cls(strip_annotation(annotation))
 
     def __init__(self, class_) -> None:
         try:
@@ -202,6 +195,18 @@ class SelfSerializer(Serializer[SelfSerializing]):
 
     def load(self, target: FileSystemTarget) -> SelfSerializing:
         return self.class_.load(target)
+
+
+def strip_annotation(annotation: typing.Type[LoadedT]) -> typing.Type[LoadedT]:
+    # TODO complete?
+    origin = typing.get_origin(annotation)
+    if origin is None:
+        return annotation
+
+    if origin != typing.Annotated:
+        return typing.get_args(annotation)[0]
+
+    return annotation
 
 
 class SerializerFactoryProtocol(typing.Protocol):
