@@ -1,4 +1,4 @@
-from dcdag.core.build.sequential import build as build_sequential
+from dcdag.build.sequential import build as build_sequential
 from dcdag.examples.ml_pipeline.decorator_api import get_metrics_dag
 
 

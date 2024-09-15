@@ -3,10 +3,10 @@ from pathlib import Path
 
 import pytest
 
-from dcdag.core.resources import target_factory_provider
-from dcdag.core.resources.target_factory import TargetFactory
-from dcdag.core.target import InMemoryFileSystemTarget, LocalTarget
-from dcdag.core.utils.testing import get_simple_dag, get_simple_dag_expected_root_output
+from dcdag.resources import target_factory_provider
+from dcdag.resources.target_factory import TargetFactory
+from dcdag.target import InMemoryFileSystemTarget, LocalTarget
+from dcdag.utils.testing import get_simple_dag, get_simple_dag_expected_root_output
 
 
 @pytest.fixture(scope="session")

@@ -2,10 +2,10 @@ import typing
 
 from pydantic import PydanticSchemaGenerationError
 
-from dcdag.core.resources import get_target
-from dcdag.core.target import LoadableSaveableFileSystemTarget, Serializable
-from dcdag.core.target.serialize import JSONSerializer, PickleSerializer
-from dcdag.core.task import Task
+from dcdag.resources import get_target
+from dcdag.target import LoadableSaveableFileSystemTarget, Serializable
+from dcdag.target.serialize import JSONSerializer, PickleSerializer
+from dcdag.task import Task
 
 LoadedT = typing.TypeVar("LoadedT")
 

@@ -3,7 +3,7 @@ import typing
 
 from pydantic import TypeAdapter
 
-from dcdag.core.target.base import (
+from dcdag.target.base import (
     FileSystemTarget,
     FileSystemTargetHandle,
     LoadableSaveableFileSystemTarget,

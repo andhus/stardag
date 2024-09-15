@@ -8,8 +8,8 @@ from pathlib import Path
 
 import pandas as pd
 
-from dcdag.core.build.sequential import build as build_sequential
-from dcdag.core.decorator import Depends, task
+from dcdag.build.sequential import build as build_sequential
+from dcdag.decorator import Depends, task
 from dcdag.examples.ml_pipeline.base import (
     DatasetFilter,
     HyperParameters,

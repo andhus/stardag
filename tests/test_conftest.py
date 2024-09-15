@@ -1,7 +1,7 @@
 from pathlib import Path
 
-from dcdag.core.resources import get_target, target_factory_provider
-from dcdag.core.target import InMemoryFileSystemTarget, LocalTarget
+from dcdag.resources import get_target, target_factory_provider
+from dcdag.target import InMemoryFileSystemTarget, LocalTarget
 
 
 def test_default_local_target_tmp_path(default_local_target_tmp_path: Path):

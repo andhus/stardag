@@ -10,10 +10,8 @@ import pandas as pd
 from pydantic import Field
 from traitlets import Any
 
-from dcdag.core.auto_task import AutoFSTTask
-from dcdag.core.build.sequential import build as build_sequential
-from dcdag.core.target import LoadedT
-from dcdag.core.task_parameter import TaskLoads
+from dcdag.auto_task import AutoFSTTask
+from dcdag.build.sequential import build as build_sequential
 from dcdag.examples.ml_pipeline.base import (
     DatasetFilter,
     DecisionTreeHyperParameters,
@@ -30,6 +28,8 @@ from dcdag.examples.ml_pipeline.base import (
     train_model,
     utc_today,
 )
+from dcdag.target import LoadedT
+from dcdag.task_parameter import TaskLoads
 
 logger = logging.getLogger(__name__)
 

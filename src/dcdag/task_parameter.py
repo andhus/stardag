@@ -10,9 +10,9 @@ from pydantic import (
     WrapValidator,
 )
 
-from dcdag.core.parameter import IDHasherABC
-from dcdag.core.target import LoadableTarget
-from dcdag.core.task import _REGISTER, Task
+from dcdag.parameter import IDHasherABC
+from dcdag.target import LoadableTarget
+from dcdag.task import _REGISTER, Task
 
 _TaskT = typing.TypeVar("_TaskT", bound=Task)
 
