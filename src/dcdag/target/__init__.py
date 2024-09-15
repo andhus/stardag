@@ -1,4 +1,4 @@
-from dcdag.target.base import (
+from dcdag.target._base import (
     FileSystemTarget,
     LoadableSaveableFileSystemTarget,
     LoadableSaveableTarget,
@@ -8,7 +8,7 @@ from dcdag.target.base import (
     SaveableTarget,
     Target,
 )
-from dcdag.target.in_memory import InMemoryFileSystemTarget, InMemoryTarget
+from dcdag.target._in_memory import InMemoryFileSystemTarget, InMemoryTarget
 from dcdag.target.serialize import Serializable
 
 __all__ = [

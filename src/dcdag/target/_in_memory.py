@@ -1,7 +1,7 @@
 from contextlib import contextmanager
 from io import BytesIO, StringIO
 
-from dcdag.target.base import (
+from dcdag.target._base import (
     FileSystemTarget,
     FileSystemTargetHandle,
     LoadableSaveableTarget,
