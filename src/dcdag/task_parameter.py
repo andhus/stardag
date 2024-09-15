@@ -1,5 +1,4 @@
 import typing
-import warnings
 
 from pydantic import (
     PlainSerializer,
@@ -93,11 +92,13 @@ def _get_task_param_validate(annotation):
             if target_t is not typing.Any:
                 # TODO check must be loosened and improved, check libs...
                 if not instance.output.__annotations__["return"] == target_t:
-                    warnings.warn(
-                        "Could not verify task parameter type compatibility."
-                        f"Input Task.output() must be compatible with {target_t}, "
-                        f"got {instance.output.__annotations__['return']}."
-                    )
+                    pass
+                    # TODO!
+                    # warnings.warn(
+                    #     "Could not verify task parameter type compatibility."
+                    #     f"Input Task.output() must be compatible with {target_t}, "
+                    #     f"got {instance.output.__annotations__['return']}."
+                    # )
 
         return instance
 

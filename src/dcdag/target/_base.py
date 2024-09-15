@@ -54,7 +54,7 @@ OpenMode = typing.Literal["r", "w", "rb", "wb"]
 @typing.runtime_checkable
 class FileSystemTargetHandle(typing.Protocol):
     def close(self) -> None: ...
-    def __enter__(self) -> "FileSystemTargetHandle": ...
+    def __enter__(self) -> typing.Self: ...
     def __exit__(
         self,
         type: type[BaseException] | None,
@@ -85,7 +85,7 @@ class WritableFileSystemTargetHandle(
 BytesT = typing.TypeVar("BytesT", bound=bytes)
 
 
-class FileSystemTargetGeneric(
+class _FileSystemTargetGeneric(
     Target,
     typing.Generic[BytesT],
     typing.Protocol,
@@ -117,22 +117,19 @@ class FileSystemTargetGeneric(
         self, mode: typing.Literal["wb"]
     ) -> WritableFileSystemTargetHandle[BytesT]: ...
 
-    def open(self, mode: OpenMode) -> FileSystemTargetHandle: ...
-
-
-class FileSystemTarget(FileSystemTargetGeneric[bytes]):
-    def open(self, mode):
+    def open(self, mode: OpenMode) -> FileSystemTargetHandle:
         """For convenience, subclasses of FileSystemTarget can implement the private
         method _open without type hints to not having to repeat the overload:s."""
-        return self._open(mode=mode)
+        return self._open(mode=mode)  # type: ignore
 
-    def _open(self, mode: OpenMode):
-        raise NotImplementedError()
+
+class FileSystemTarget(_FileSystemTargetGeneric[bytes], typing.Protocol):
+    pass
 
 
 class LoadableSaveableFileSystemTarget(
     LoadableSaveableTarget[LoadedT],
-    FileSystemTargetGeneric[bytes],
+    _FileSystemTargetGeneric[bytes],
     typing.Generic[LoadedT],
     typing.Protocol,
 ): ...

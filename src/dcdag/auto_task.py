@@ -1,10 +1,11 @@
 import typing
 
-from pydantic import PydanticSchemaGenerationError
 
 from dcdag.resources import get_target
 from dcdag.target import LoadableSaveableFileSystemTarget, Serializable
-from dcdag.target.serialize import JSONSerializer, PickleSerializer
+from dcdag.target.serialize import (
+    get_serializer,
+)
 from dcdag.task import Task
 
 LoadedT = typing.TypeVar("LoadedT")
@@ -14,6 +15,14 @@ class AutoFSTTask(
     Task[LoadableSaveableFileSystemTarget[LoadedT]],
     typing.Generic[LoadedT],
 ):
+    @classmethod
+    def __pydantic_init_subclass__(cls, **kwargs: typing.Any) -> None:
+        super().__pydantic_init_subclass__(**kwargs)
+        # get generic type of self
+        loaded_t = typing.get_args(cls.__orig_class__)[0]
+        if type(loaded_t) != typing.TypeVar:
+            cls._serializer = get_serializer(loaded_t)
+
     @property
     def _relpath_base(self) -> str:
         return ""
@@ -46,15 +55,7 @@ class AutoFSTTask(
         )
 
     def output(self) -> LoadableSaveableFileSystemTarget[LoadedT]:
-        # get generic type of self
-        loaded_t = typing.get_args(self.__orig_class__)[0]
-
-        try:
-            serializer = JSONSerializer(annotation=loaded_t)
-        except PydanticSchemaGenerationError:
-            serializer = PickleSerializer[loaded_t]()
-
         return Serializable(
             wrapped=get_target(self._relpath, task=self),
-            serializer=serializer,
+            serializer=self._serializer,
         )
