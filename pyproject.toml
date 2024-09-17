@@ -34,3 +34,7 @@ profile = "black"
 [tool.pyright]
 venvPath = "."
 venv = ".venv"
+
+
+[tool.pytest]
+testpaths = ["tests"]

@@ -1,4 +1,4 @@
-from dcdag.core.task import Task, TaskDeps
+from dcdag.task import Task, TaskDeps
 
 
 def build(task: Task, completion_cache: set[str] | None = None) -> None:

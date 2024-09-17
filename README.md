@@ -58,18 +58,19 @@ Main idea
   - [ ] Atomic Writes (copy luigi approach?)
   - [ ] S3
   - [ ] GS
-- [ ] Serialization -> AutoTask
-  - [ ] Module structure
-    - [ ] Rename to just `AutoTask`?
-  - [ ] Extend Interface of Serializer to have `.init(annotation)` after initialization -> This way you can set additional tuning parameters up front (without partials), and compose serializers (see below: `GZip(JSON())`) and property `default_ext: str`
-  - [ ] Make serializer initialization happen on task declaration for early errors! Use `__pydantic_init_subclass__`
+- [x] Serialization -> AutoTask
+  - [x] Module structure
+    - [x] Rename to just `AutoTask`?
+  - [ ] ~~Extend Interface of Serializer to have `.init(annotation)` after initialization -> This way you can set additional tuning parameters up front (without partials), and compose serializers (see below: `GZip(JSON())`) and property~~
+  - [x] `default_ext: str`
+  - [x] Make serializer initialization happen on task declaration for early errors! Use `__pydantic_init_subclass__`
   - [ ] Allow specifying explicit serializer: `AutoTask[Feather[pd.DataFrame]]` = `AutoTask[Annotated[pd.DataFrame, PandasFeatherSerializer()]]`
   - [ ] Defaults for:
-    - [ ] anything JSONAble (pydantic)
-    - [ ] pd.DataFrame
+    - [x] anything JSONAble (pydantic)
+    - [x] pd.DataFrame
     - [ ] pd.Series
     - [ ] numpy array
-    - [ ] Fallback on Pickle
+    - [x] Fallback on Pickle
   - [ ] (`GZip[JSON[dict[str, str]]]` = `GZipJSON[dict[str, str]]` = `Annotated[dict[str, str], GZip(JSON())]` ?)
   - [ ] Set `.ext` based on serializer. I.e. add `_relpath_ext` as a property, which by default reads from self.serializer.default_ext
 - [ ] function decorator API

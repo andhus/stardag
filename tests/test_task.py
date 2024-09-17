@@ -1,7 +1,7 @@
 import typing
 
-from dcdag.core.fsttask import AutoFSTTask
-from dcdag.core.parameter import (
+from dcdag.auto_task import AutoFSTTask
+from dcdag.parameter import (
     IDHasher,
     IDHashExclude,
     IDHashInclude,

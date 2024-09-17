@@ -1,9 +1,9 @@
 import json
 import typing
 
-from dcdag.core.build import sequential
-from dcdag.core.target import InMemoryFileSystemTarget
-from dcdag.core.utils.testing import TestTaskRoot, TestTaskRootLoadedT
+from dcdag.build import sequential
+from dcdag.target import InMemoryFileSystemTarget
+from dcdag.utils.testing import TestTaskRoot, TestTaskRootLoadedT
 
 
 def test_build_simple_dag(

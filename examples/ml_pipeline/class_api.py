@@ -10,11 +10,12 @@ import pandas as pd
 from pydantic import Field
 from traitlets import Any
 
-from dcdag.core.build.sequential import build as build_sequential
-from dcdag.core.fsttask import AutoFSTTask
-from dcdag.core.target import LoadedT
-from dcdag.core.task_parameter import TaskLoads
-from dcdag.examples.ml_pipeline.base import (
+from dcdag.auto_task import AutoFSTTask
+from dcdag.build.sequential import build as build_sequential
+from dcdag.target import LoadedT
+from dcdag.task_parameter import TaskLoads
+
+from .base import (
     DatasetFilter,
     DecisionTreeHyperParameters,
     HyperParameters,

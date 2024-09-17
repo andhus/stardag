@@ -30,7 +30,7 @@ class IDHasher(IDHasherABC[ParameterT]):
         return self
 
     def __call__(self, value: ParameterT) -> JsonValue:
-        from dcdag.core.task import Task
+        from dcdag.task import Task
 
         if isinstance(value, Task):
             return value.task_id

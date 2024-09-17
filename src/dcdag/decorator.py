@@ -3,9 +3,9 @@ import typing
 
 from pydantic import create_model
 
-from dcdag.core.fsttask import AutoFSTTask
-from dcdag.core.task import Task
-from dcdag.core.task_parameter import TaskLoads
+from dcdag.auto_task import AutoFSTTask
+from dcdag.task import Task
+from dcdag.task_parameter import TaskLoads
 
 LoadedT = typing.TypeVar("LoadedT")
 FuncT = typing.TypeVar("FuncT", bound=typing.Callable)
@@ -13,7 +13,7 @@ FuncT = typing.TypeVar("FuncT", bound=typing.Callable)
 _PWrapped = typing.ParamSpec("_PWrapped")
 
 
-class FunctionTask(AutoFSTTask[LoadedT], typing.Generic[LoadedT, _PWrapped]):
+class _FunctionTask(AutoFSTTask[LoadedT], typing.Generic[LoadedT, _PWrapped]):
     _func: typing.Callable[_PWrapped, LoadedT]
 
     if typing.TYPE_CHECKING:
@@ -65,7 +65,7 @@ class _TaskWrapper(typing.Protocol):
     def __call__(
         self,
         _func: typing.Callable[_PWrapped, LoadedT],
-    ) -> typing.Type[FunctionTask[LoadedT, _PWrapped]]: ...
+    ) -> typing.Type[_FunctionTask[LoadedT, _PWrapped]]: ...
 
 
 _Relpath = str | typing.Callable[[AutoFSTTask[LoadedT]], str] | None
@@ -78,7 +78,7 @@ def task(
     version: str = "0",
     relpath: _Relpath = None,
     relpath_base: str | None = None,
-) -> typing.Type[FunctionTask[LoadedT, _PWrapped]]: ...
+) -> typing.Type[_FunctionTask[LoadedT, _PWrapped]]: ...
 
 
 @typing.overload
@@ -97,10 +97,10 @@ def task(
     relpath: _Relpath = None,
     relpath_base: str | None = None,
     # TODO remaining kwargs!
-) -> typing.Type[FunctionTask[LoadedT, _PWrapped]] | _TaskWrapper:
+) -> typing.Type[_FunctionTask[LoadedT, _PWrapped]] | _TaskWrapper:
     def wrapper(
         _func: typing.Callable[_PWrapped, LoadedT],
-    ) -> typing.Type[FunctionTask[LoadedT, _PWrapped]]:
+    ) -> typing.Type[_FunctionTask[LoadedT, _PWrapped]]:
         """Decorator to turn a function into a task."""
 
         signature = inspect.signature(_func)
@@ -113,7 +113,7 @@ def task(
 
         task_class = create_model(
             _func.__name__,
-            __base__=FunctionTask[return_type, _PWrapped],
+            __base__=_FunctionTask[return_type, _PWrapped],
             __module__=_func.__module__,
             version=(str | None, version),
             **{  # type: ignore

@@ -19,14 +19,14 @@ from pydantic import BaseModel, Field
 from pydantic.fields import FieldInfo
 from typing_extensions import List, TypeAlias, Union
 
-from dcdag.core.parameter import (
+from dcdag.parameter import (
     IDHasher,
     IDHasherABC,
     IDHashInclude,
     IDHashIncludeABC,
     _ParameterConfig,
 )
-from dcdag.core.target import Target
+from dcdag.target import Target
 
 TargetT = TypeVar("TargetT", bound=Union[Target, None], covariant=True)
 
