@@ -52,7 +52,7 @@ class AutoFSTTask(
                 part
                 for part in [
                     self._relpath_base,
-                    self.get_task_family(),
+                    self.get_family(),
                     f"v{self.version}" if self.version else "",
                     self._relpath_extra,
                     self.task_id[:2],

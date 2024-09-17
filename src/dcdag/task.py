@@ -1,8 +1,8 @@
 import json
+import logging
 from abc import abstractmethod
 from functools import cached_property
 from hashlib import sha1
-from os import name
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -29,6 +29,8 @@ from dcdag.parameter import (
 )
 from dcdag.target import Target
 
+logger = logging.getLogger(__name__)
+
 TargetT = TypeVar("TargetT", bound=Union[Target, None], covariant=True)
 
 TaskStruct: TypeAlias = Union["Task", List["TaskStruct"], Dict[str, "TaskStruct"]]
@@ -48,26 +50,56 @@ class _Register:
         self._module_to_namespace: dict[str, str] = {}
 
     def add(self, task_class: Type["Task"]):
-        # TODO support luigi style name spacing
-        namespace_family = self.get_namespace_family(task_class)
-
-        if self._namespace_family_to_class.get(namespace_family):
+        self._finalize_namespace(task_class)
+        namespace_family = task_class.get_namespace_family()
+        logger.debug(
+            f"\nRegistering task class: {task_class}\n"
+            f"  namespace_family: {namespace_family}\n"
+            f"  module.name: {task_class.__module__}.{task_class.__name__}\n"
+            f"  __orig_bases__: {getattr(task_class, '__orig_bases__')}\n"
+            "  __pydantic_generic_metadata__: "
+            f"{task_class.__pydantic_generic_metadata__}\n"
+        )
+        existing = self._namespace_family_to_class.get(namespace_family)
+        if existing:
             raise ValueError(
-                f"Task family name {task_class.get_task_family()} already registered."
+                "A task is already registered for the "
+                f'namespace_family "{namespace_family}".\n'
+                f"Existing: {existing.__module__}.{existing.__name__}\n"
+                f"New: {task_class.__module__}.{task_class.__name__}"
             )
         self._namespace_family_to_class[namespace_family] = task_class
 
-    def get(self, task_family: str) -> Type["Task"]:
-        return self._namespace_family_to_class[task_family]
+    def get(self, namespace, family: str) -> Type["Task"]:
+        namespace_family = get_namespace_family(namespace, family)
+        return self._namespace_family_to_class[namespace_family]
 
     def add_module_namespace(self, module: str, namespace: str):
         self._module_to_namespace[module] = namespace
 
-    def get_namespace_family(self, task_class: Type["Task"]) -> str:
+    def _finalize_namespace(self, task_class: Type["Task"]):
+        if task_class.__namespace__ is not None:
+            # Already set explicitly on task
+            return
+        # check if set by module
         namespace = self._module_to_namespace.get(task_class.__module__)
         if namespace:
-            return f"{namespace}.{task_class.get_task_family()}"
-        return task_class.get_task_family()
+            task_class.__namespace__ = namespace
+        else:
+            task_class.__namespace__ = ""
+
+
+def get_namespace_family(namespace: str, family: str) -> str:
+    if namespace:  # NOTE: empty string is "no namespace"
+        return f"{namespace}.{family}"
+    return family
+
+
+def is_generic_task_class(cls: Type["Task"]) -> bool:
+    meta = cls.__pydantic_generic_metadata__
+    if meta["origin"] or meta["parameters"]:
+        return True
+    return False
 
 
 _REGISTER = _Register()
@@ -108,13 +140,22 @@ class Task(BaseModel, Generic[TargetT]):
     if TYPE_CHECKING:
         _param_configs: ClassVar[Dict[str, _ParameterConfig]] = {}
         __orig_class__: ClassVar[Any]  # _Generic[TargetT]
+        __namespace__: ClassVar[str]
+        __family__: ClassVar[str]
     else:
         _param_configs = {}
+        __namespace__: ClassVar[str | None] = None
+        __family__: ClassVar[str | None] = None
 
     @classmethod
     def __pydantic_init_subclass__(cls, **kwargs: Any) -> None:
         super().__pydantic_init_subclass__(**kwargs)
-        _REGISTER.add(cls)
+
+        # Register (including set namespace) and set family for *non generic* task
+        # classes
+        if not is_generic_task_class(cls):
+            cls.__family__ = cls.__family__ or cls.__name__
+            _REGISTER.add(cls)
 
         def get_one(field_info: FieldInfo, class_or_tuple, default_factory):
             matches = [
@@ -155,6 +196,22 @@ class Task(BaseModel, Generic[TargetT]):
         create_model.__orig_class__ = _Generic[params]  # type: ignore
         return create_model
 
+    @classmethod
+    def get_namespace(cls) -> str:
+        if cls.__namespace__ is None:
+            raise ValueError("Namespace not set.")
+        return cls.__namespace__
+
+    @classmethod
+    def get_family(cls) -> str:
+        return cls.__family__
+
+    @classmethod
+    def get_namespace_family(cls) -> str:
+        if cls.get_namespace():  # NOTE: empty string is "no namespace"
+            return f"{cls.get_namespace()}.{cls.get_family()}"
+        return cls.get_family()
+
     def complete(self) -> bool:
         """Check if the task is complete."""
         target = self.output()
@@ -175,10 +232,6 @@ class Task(BaseModel, Generic[TargetT]):
     def requires(self) -> TaskDeps:
         return None
 
-    @classmethod
-    def get_task_family(cls) -> str:
-        return cls.__name__
-
     @cached_property
     def task_id(self) -> str:
         return get_str_hash(self._id_hash_json())
@@ -186,7 +239,7 @@ class Task(BaseModel, Generic[TargetT]):
     @property
     def id_ref(self) -> TaskIDRef:
         return TaskIDRef(
-            task_family=self.get_task_family(),
+            task_family=self.get_family(),
             version=self.version,
             task_id=self.task_id,
         )
@@ -199,7 +252,7 @@ class Task(BaseModel, Generic[TargetT]):
 
     def _id_hash_jsonable(self) -> dict:
         return {
-            "task_family": self.get_task_family(),
+            "task_family": self.get_family(),
             "parameters": {
                 name: config.id_hasher(getattr(self, name))
                 for name, config in self._param_configs.items()

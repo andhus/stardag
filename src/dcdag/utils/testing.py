@@ -1,11 +1,11 @@
 from dcdag.auto_task import AutoFSTTask
 from dcdag.target import LoadableTarget
-from dcdag.task import Task
+from dcdag.task import Task, auto_namespace
 from dcdag.task_parameter import TaskParam
 
-__task_namespace__ = "dcdag.utils.testing"
-
 LeafTaskLoadedT = dict[str, str | int | None]
+
+auto_namespace(__name__)
 
 
 class LeafTask(AutoFSTTask[LeafTaskLoadedT]):

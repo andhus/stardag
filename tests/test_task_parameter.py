@@ -21,7 +21,8 @@ def test_task_param():
     assert parent.model_dump() == {
         "version": None,
         "child": {
-            "__task_family": "ChildTask",
+            "__family__": "ChildTask",
+            "__namespace__": "",
             "version": None,
             "a": "A",
         },
@@ -49,12 +50,14 @@ def test_set_of_task_params():
     assert parent_dict["version"] is None
     assert sorted(parent_dict["children"], key=lambda x: x["a"]) == [
         {
-            "__task_family": "ChildTask",
+            "__family__": "ChildTask",
+            "__namespace__": "",
             "version": None,
             "a": "A",
         },
         {
-            "__task_family": "ChildTask",
+            "__family__": "ChildTask",
+            "__namespace__": "",
             "version": None,
             "a": "B",
         },
@@ -81,7 +84,8 @@ def test_task_loads():
     assert parent.model_dump() == {
         "version": None,
         "child": {
-            "__task_family": "ChildTask",
+            "__family__": "ChildTask",
+            "__namespace__": "",
             "version": None,
             "a": "A",
         },
