@@ -148,13 +148,26 @@ class Task(BaseModel, Generic[TargetT]):
         __family__: ClassVar[str | None] = None
 
     @classmethod
-    def __pydantic_init_subclass__(cls, **kwargs: Any) -> None:
+    def __init_subclass__(
+        cls,
+        family: str | None = None,
+        **kwargs: Any,
+    ) -> None:
+        # Need to avoid forwarding the family kwarg to the BaseModel
+        super().__init_subclass__(**kwargs)
+
+    @classmethod
+    def __pydantic_init_subclass__(
+        cls,
+        family: str | None = None,
+        **kwargs: Any,
+    ) -> None:
         super().__pydantic_init_subclass__(**kwargs)
 
         # Register (including set namespace) and set family for *non generic* task
         # classes
         if not is_generic_task_class(cls):
-            cls.__family__ = cls.__family__ or cls.__name__
+            cls.__family__ = family or cls.__name__
             _REGISTER.add(cls)
 
         def get_one(field_info: FieldInfo, class_or_tuple, default_factory):

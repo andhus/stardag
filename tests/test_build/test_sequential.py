@@ -3,7 +3,7 @@ import typing
 
 from dcdag.build import sequential
 from dcdag.target import InMemoryFileSystemTarget
-from dcdag.utils.testing import RootTask, RootTaskLoadedT
+from dcdag.utils.testing.simple_dag import RootTask, RootTaskLoadedT
 
 
 def test_build_simple_dag(

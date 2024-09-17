@@ -11,7 +11,14 @@ from dcdag.parameter import (
     always_include,
 )
 from dcdag.task import _REGISTER, Task, get_namespace_family
-from dcdag.utils.testing import ClearNamespaceTask, LeafTask, OverrideNamespaceTask
+from dcdag.utils.testing.namepace import (
+    ClearNamespaceTask,
+    CustomFamilyTask,
+    CustomFamilyTask2,
+    OverrideNamespaceTask,
+    UnspecifiedNamespaceTask,
+)
+from dcdag.utils.testing.simple_dag import LeafTask
 
 
 class MockTask(AutoFSTTask[str]):
@@ -35,9 +42,12 @@ def test_parameter():
     "task_class,expected_namespace_family",
     [
         (MockTask, "MockTask"),
-        (LeafTask, "dcdag.utils.testing.LeafTask"),
+        (LeafTask, "dcdag.utils.testing.simple_dag.LeafTask"),
         (OverrideNamespaceTask, "override_namespace.OverrideNamespaceTask"),
         (ClearNamespaceTask, "ClearNamespaceTask"),
+        (UnspecifiedNamespaceTask, "UnspecifiedNamespaceTask"),  # TODO from parent mod
+        (CustomFamilyTask, "custom_family"),
+        (CustomFamilyTask2, "custom_family_2"),
     ],
 )
 def test_auto_namespace(task_class: typing.Type[Task], expected_namespace_family):

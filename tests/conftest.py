@@ -6,7 +6,10 @@ import pytest
 from dcdag.resources import target_factory_provider
 from dcdag.resources.target_factory import TargetFactory
 from dcdag.target import InMemoryFileSystemTarget, LocalTarget
-from dcdag.utils.testing import get_simple_dag, get_simple_dag_expected_root_output
+from dcdag.utils.testing.simple_dag import (
+    get_simple_dag,
+    get_simple_dag_expected_root_output,
+)
 
 
 @pytest.fixture(scope="session")
