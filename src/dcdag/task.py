@@ -81,12 +81,18 @@ class _Register:
         if task_class.__namespace__ is not None:
             # Already set explicitly on task
             return
-        # check if set by module
-        namespace = self._module_to_namespace.get(task_class.__module__)
-        if namespace:
-            task_class.__namespace__ = namespace
-        else:
-            task_class.__namespace__ = ""
+
+        # check if set by module or any parent module
+        module_parts = task_class.__module__.split(".")
+        for idx in range(len(module_parts), 0, -1):
+            module = ".".join(module_parts[:idx])
+            namespace = self._module_to_namespace.get(module)
+            if namespace:
+                task_class.__namespace__ = namespace
+                return
+
+        # No namespace set
+        task_class.__namespace__ = ""
 
 
 def get_namespace_family(namespace: str, family: str) -> str:

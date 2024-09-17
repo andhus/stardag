@@ -45,9 +45,9 @@ def test_parameter():
         (LeafTask, "dcdag.utils.testing.simple_dag.LeafTask"),
         (OverrideNamespaceTask, "override_namespace.OverrideNamespaceTask"),
         (ClearNamespaceTask, "ClearNamespaceTask"),
-        (UnspecifiedNamespaceTask, "UnspecifiedNamespaceTask"),  # TODO from parent mod
-        (CustomFamilyTask, "custom_family"),
-        (CustomFamilyTask2, "custom_family_2"),
+        (UnspecifiedNamespaceTask, "dcdag.utils.testing.UnspecifiedNamespaceTask"),
+        (CustomFamilyTask, "dcdag.utils.testing.custom_family"),
+        (CustomFamilyTask2, "dcdag.utils.testing.custom_family_2"),
     ],
 )
 def test_auto_namespace(task_class: typing.Type[Task], expected_namespace_family):
