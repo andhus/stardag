@@ -59,3 +59,23 @@ def get_simple_dag_expected_root_output():
             ]
         },
     }
+
+
+class OverrideNamespaceTask(Task[None]):
+    __namespace__ = "override_namespace"
+
+    def complete(self) -> bool:
+        return True
+
+    def run(self):
+        pass
+
+
+class ClearNamespaceTask(Task[None]):
+    __namespace__ = ""
+
+    def complete(self) -> bool:
+        return True
+
+    def run(self):
+        pass

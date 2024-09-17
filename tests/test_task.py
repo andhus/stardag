@@ -1,5 +1,7 @@
 import typing
 
+import pytest
+
 from dcdag.auto_task import AutoFSTTask
 from dcdag.parameter import (
     IDHasher,
@@ -8,6 +10,8 @@ from dcdag.parameter import (
     _ParameterConfig,
     always_include,
 )
+from dcdag.task import _REGISTER, Task, get_namespace_family
+from dcdag.utils.testing import ClearNamespaceTask, LeafTask, OverrideNamespaceTask
 
 
 class MockTask(AutoFSTTask[str]):
@@ -25,3 +29,20 @@ def test_parameter():
             typing.Annotated[str, IDHashInclude(False)],  # type: ignore
         ),
     )
+
+
+@pytest.mark.parametrize(
+    "task_class,expected_namespace_family",
+    [
+        (MockTask, "MockTask"),
+        (LeafTask, "dcdag.utils.testing.LeafTask"),
+        (OverrideNamespaceTask, "override_namespace.OverrideNamespaceTask"),
+        (ClearNamespaceTask, "ClearNamespaceTask"),
+    ],
+)
+def test_auto_namespace(task_class: typing.Type[Task], expected_namespace_family):
+    assert task_class.get_namespace_family() == expected_namespace_family
+    namespace = task_class.get_namespace()
+    family = task_class.get_family()
+    assert get_namespace_family(namespace, family) == expected_namespace_family
+    assert _REGISTER.get(namespace, family) == task_class
