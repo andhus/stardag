@@ -1,7 +1,6 @@
 import abc
 import pickle
 import typing
-import warnings
 
 from pydantic import PydanticSchemaGenerationError, TypeAdapter
 
@@ -91,6 +90,32 @@ class Serializable(
         return self.wrapped.open(mode)
 
 
+class PlainTextSerializer(Serializer[str]):
+    @classmethod
+    def type_checked_init(cls, annotation: typing.Type[str]) -> typing.Self:
+        if strip_annotation(annotation) != str:
+            raise ValueError(f"{annotation} must be str.")
+        return cls()
+
+    def dump(
+        self,
+        obj: str,
+        target: FileSystemTarget,
+    ) -> None:
+        with target.open("w") as handle:
+            handle.write(obj)
+
+    def load(self, target: FileSystemTarget) -> str:
+        with target.open("r") as handle:
+            return handle.read()
+
+    def get_default_extension(self) -> str:
+        return "txt"
+
+    def __eq__(self, value: object) -> bool:
+        return type(self) == type(value)
+
+
 class JSONSerializer(Serializer[LoadedT]):
     @classmethod
     def type_checked_init(cls, annotation: typing.Type[LoadedT]) -> typing.Self:
@@ -117,6 +142,13 @@ class JSONSerializer(Serializer[LoadedT]):
     def get_default_extension(self) -> str:
         return "json"
 
+    def __eq__(self, value: object) -> bool:
+        return (
+            type(self) == type(value)
+            and isinstance(value, JSONSerializer)
+            and self.type_adapter.core_schema == value.type_adapter.core_schema
+        )
+
 
 class PickleSerializer(Serializer[LoadedT]):
     @classmethod
@@ -138,6 +170,9 @@ class PickleSerializer(Serializer[LoadedT]):
 
     def get_default_extension(self) -> str:
         return "pkl"
+
+    def __eq__(self, value: object) -> bool:
+        return type(self) == type(value)
 
 
 class PandasDataFrameCSVSerializer(Serializer[DataFrame]):
@@ -169,6 +204,9 @@ class PandasDataFrameCSVSerializer(Serializer[DataFrame]):
     def get_default_extension(self) -> str:
         return "csv"
 
+    def __eq__(self, value: object) -> bool:
+        return type(self) == type(value)
+
 
 @typing.runtime_checkable
 class SelfSerializing(typing.Protocol):
@@ -188,7 +226,6 @@ class SelfSerializer(Serializer[SelfSerializing]):
         try:
             is_subclass_ = issubclass(class_, SelfSerializing)
         except TypeError:
-            warnings.warn(f"{class_} must be a class.")
             raise ValueError(f"{class_} must be a class.")
 
         if not is_subclass_:
@@ -208,6 +245,13 @@ class SelfSerializer(Serializer[SelfSerializing]):
     def get_default_extension(self) -> str | None:
         return getattr(self.class_, "default_serialized_extension", None)
 
+    def __eq__(self, value: object) -> bool:
+        return (
+            type(self) == type(value)
+            and isinstance(value, SelfSerializer)
+            and self.class_ == value.class_
+        )
+
 
 def strip_annotation(annotation: typing.Type[LoadedT]) -> typing.Type[LoadedT]:
     # TODO complete?
@@ -215,7 +259,7 @@ def strip_annotation(annotation: typing.Type[LoadedT]) -> typing.Type[LoadedT]:
     if origin is None:
         return annotation
 
-    if origin != typing.Annotated:
+    if origin == typing.Annotated:
         return typing.get_args(annotation)[0]
 
     return annotation
@@ -227,9 +271,14 @@ class SerializerFactoryProtocol(typing.Protocol):
 
 
 _DEFAULT_SERIALIZER_CANDIDATES: tuple[SerializerFactoryProtocol] = (
+    # TODO first check for explicit serializer: Annotated[<type>, Serializer]
     SelfSerializer.type_checked_init,  # type: ignore
+    # specific type serializers
     PandasDataFrameCSVSerializer.type_checked_init,
+    PlainTextSerializer.type_checked_init,
+    # generic serializers
     JSONSerializer.type_checked_init,
+    # fallback
     PickleSerializer.type_checked_init,
 )
 
