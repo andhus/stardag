@@ -270,8 +270,21 @@ class SerializerFactoryProtocol(typing.Protocol):
     def __call__(self, annotation: typing.Type[LoadedT]) -> Serializer[LoadedT]: ...
 
 
+def get_explicitly_annotated_serializer(
+    annotation: typing.Type[LoadedT],
+) -> Serializer[LoadedT]:
+    origin = typing.get_origin(annotation)
+    if origin == typing.Annotated:
+        args = typing.get_args(annotation)
+        for arg in args[1:]:  # NOTE important to skip the first arg
+            if isinstance(arg, Serializer):
+                return arg
+
+    raise ValueError(f"No explicit serializer found for {annotation}")
+
+
 _DEFAULT_SERIALIZER_CANDIDATES: tuple[SerializerFactoryProtocol] = (
-    # TODO first check for explicit serializer: Annotated[<type>, Serializer]
+    get_explicitly_annotated_serializer,
     SelfSerializer.type_checked_init,  # type: ignore
     # specific type serializers
     PandasDataFrameCSVSerializer.type_checked_init,

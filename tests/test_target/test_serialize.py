@@ -11,6 +11,7 @@ from dcdag.target.serialize import (
     PlainTextSerializer,
     SelfSerializer,
     SelfSerializing,
+    Serializer,
     get_serializer,
 )
 
@@ -34,6 +35,19 @@ class _NoDefaultSerializerType:
         self.value = value
 
 
+class CustomMockSerializer(Serializer[str]):
+    def dump(self, obj: str, target: FileSystemTarget) -> None:
+        with target.open("w") as f:
+            f.write(obj)
+
+    def load(self, target: FileSystemTarget) -> str:
+        with target.open("r") as f:
+            return f.read()
+
+    def __eq__(self, value: object) -> bool:
+        return isinstance(value, CustomMockSerializer)
+
+
 @pytest.mark.parametrize(
     "annotation,expected_serializer",
     [
@@ -45,8 +59,13 @@ class _NoDefaultSerializerType:
         (DataFrame, PandasDataFrameCSVSerializer()),
         (_SelfSerializing, SelfSerializer(_SelfSerializing)),
         (_NoDefaultSerializerType, PickleSerializer()),
+        (typing.Annotated[str, CustomMockSerializer()], CustomMockSerializer()),
     ],
 )
 def test_get_serializer(annotation, expected_serializer):
     serializer = get_serializer(annotation)
     assert serializer == expected_serializer
+
+    extra_annotation = typing.Annotated[annotation, "extra"]
+    serializer_from_extra_annotated = get_serializer(extra_annotation)  # type: ignore
+    assert serializer_from_extra_annotated == expected_serializer
