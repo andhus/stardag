@@ -12,11 +12,19 @@ from dcdag.parameter import (
 )
 from dcdag.task import _REGISTER, Task, get_namespace_family
 from dcdag.utils.testing.namepace import (
-    ClearNamespaceTask,
-    CustomFamilyTask,
-    CustomFamilyTask2,
-    OverrideNamespaceTask,
-    UnspecifiedNamespaceTask,
+    ClearNamespaceByArg,
+    ClearNamespaceByDunder,
+    CustomFamilyByArgFromIntermediate,
+    CustomFamilyByArgFromIntermediateChild,
+    CustomFamilyByArgFromTask,
+    CustomFamilyByArgFromTaskChild,
+    CustomFamilyByDUnder,
+    CustomFamilyByDUnderChild,
+    OverrideNamespaceByArg,
+    OverrideNamespaceByArgChild,
+    OverrideNamespaceByDUnder,
+    OverrideNamespaceByDUnderChild,
+    UnspecifiedNamespace,
 )
 from dcdag.utils.testing.simple_dag import LeafTask
 
@@ -41,13 +49,37 @@ def test_parameter():
 @pytest.mark.parametrize(
     "task_class,expected_namespace_family",
     [
+        # namespace
         (MockTask, "MockTask"),
         (LeafTask, "dcdag.utils.testing.simple_dag.LeafTask"),
-        (OverrideNamespaceTask, "override_namespace.OverrideNamespaceTask"),
-        (ClearNamespaceTask, "ClearNamespaceTask"),
-        (UnspecifiedNamespaceTask, "dcdag.utils.testing.UnspecifiedNamespaceTask"),
-        (CustomFamilyTask, "dcdag.utils.testing.custom_family"),
-        (CustomFamilyTask2, "dcdag.utils.testing.custom_family_2"),
+        (UnspecifiedNamespace, "dcdag.utils.testing.UnspecifiedNamespace"),
+        # namespace override by dunder
+        (OverrideNamespaceByDUnder, "override_namespace.OverrideNamespaceByDUnder"),
+        (ClearNamespaceByDunder, "ClearNamespaceByDunder"),
+        (
+            OverrideNamespaceByDUnderChild,
+            "override_namespace.OverrideNamespaceByDUnderChild",
+        ),
+        # namespace override by arg
+        (OverrideNamespaceByArg, "override_namespace.OverrideNamespaceByArg"),
+        (ClearNamespaceByArg, "ClearNamespaceByArg"),
+        (
+            OverrideNamespaceByArgChild,
+            "dcdag.utils.testing.OverrideNamespaceByArgChild",
+        ),
+        # family override
+        (CustomFamilyByArgFromIntermediate, "dcdag.utils.testing.custom_family"),
+        (
+            CustomFamilyByArgFromIntermediateChild,
+            "dcdag.utils.testing.CustomFamilyByArgFromIntermediateChild",
+        ),
+        (CustomFamilyByArgFromTask, "dcdag.utils.testing.custom_family_2"),
+        (
+            CustomFamilyByArgFromTaskChild,
+            "dcdag.utils.testing.CustomFamilyByArgFromTaskChild",
+        ),
+        (CustomFamilyByDUnder, "dcdag.utils.testing.custom_family_3"),
+        (CustomFamilyByDUnderChild, "dcdag.utils.testing.custom_family_3_child"),
     ],
 )
 def test_auto_namespace(task_class: typing.Type[Task], expected_namespace_family):

@@ -47,11 +47,28 @@ TaskDeps: TypeAlias = Union[
 class _Register:
     def __init__(self):
         self._namespace_family_to_class: dict[str, Type["Task"]] = {}
+        self._class_to_family_and_namespace: dict[Type["Task"], Tuple[str, str]] = {}
         self._module_to_namespace: dict[str, str] = {}
 
-    def add(self, task_class: Type["Task"]):
-        self._finalize_namespace(task_class)
-        namespace_family = task_class.get_namespace_family()
+    def add(
+        self,
+        task_class: Type["Task"],
+        family_override: str | None,
+        namespace_override: str | None,
+    ):
+        if task_class in self._class_to_family_and_namespace:
+            raise ValueError(f"Task class already registered: {task_class}")
+
+        family = self._get_family(
+            task_class,
+            family_override=family_override,
+        )
+        namespace = self._get_namespace(
+            task_class,
+            namespace_override=namespace_override,
+        )
+        self._class_to_family_and_namespace[task_class] = (family, namespace)
+        namespace_family = get_namespace_family(namespace, family)
         logger.debug(
             f"\nRegistering task class: {task_class}\n"
             f"  namespace_family: {namespace_family}\n"
@@ -77,10 +94,41 @@ class _Register:
     def add_module_namespace(self, module: str, namespace: str):
         self._module_to_namespace[module] = namespace
 
-    def _finalize_namespace(self, task_class: Type["Task"]):
-        if task_class.__namespace__ is not None:
+    def get_task_family_and_namespace(
+        self,
+        task_class: Type["Task"],
+    ) -> Tuple[str, str]:
+        res = self._class_to_family_and_namespace.get(task_class)
+        if res is None:
+            raise ValueError(f"Task class not registered: {task_class}")
+        return res
+
+    def _get_family(
+        self,
+        task_class: Type["Task"],
+        family_override: str | None,
+    ) -> str:
+        if family_override is not None:
+            return family_override
+
+        if task_class.__family__ is not None:
             # Already set explicitly on task
-            return
+            return task_class.__family__
+
+        # No family set
+        return task_class.__name__
+
+    def _get_namespace(
+        self,
+        task_class: Type["Task"],
+        namespace_override: str | None,
+    ) -> str:
+        if namespace_override is not None:
+            return namespace_override
+
+        if task_class.__namespace__ is not None:
+            # Already set explicitly on task class
+            return task_class.__namespace__
 
         # check if set by module or any parent module
         module_parts = task_class.__module__.split(".")
@@ -88,11 +136,10 @@ class _Register:
             module = ".".join(module_parts[:idx])
             namespace = self._module_to_namespace.get(module)
             if namespace:
-                task_class.__namespace__ = namespace
-                return
+                return namespace
 
         # No namespace set
-        task_class.__namespace__ = ""
+        return ""
 
 
 def get_namespace_family(namespace: str, family: str) -> str:
@@ -156,16 +203,18 @@ class Task(BaseModel, Generic[TargetT]):
     @classmethod
     def __init_subclass__(
         cls,
-        family: str | None = None,
+        family_override: str | None = None,
+        namespace_override: str | None = None,
         **kwargs: Any,
     ) -> None:
-        # Need to avoid forwarding the family kwarg to the BaseModel
+        # Need to avoid forwarding the family and namespace kwarg to the BaseModel
         super().__init_subclass__(**kwargs)
 
     @classmethod
     def __pydantic_init_subclass__(
         cls,
-        family: str | None = None,
+        family_override: str | None = None,
+        namespace_override: str | None = None,
         **kwargs: Any,
     ) -> None:
         super().__pydantic_init_subclass__(**kwargs)
@@ -173,8 +222,11 @@ class Task(BaseModel, Generic[TargetT]):
         # Register (including set namespace) and set family for *non generic* task
         # classes
         if not is_generic_task_class(cls):
-            cls.__family__ = family or cls.__name__
-            _REGISTER.add(cls)
+            _REGISTER.add(
+                cls,
+                family_override=family_override,
+                namespace_override=namespace_override,
+            )
 
         def get_one(field_info: FieldInfo, class_or_tuple, default_factory):
             matches = [
@@ -217,19 +269,16 @@ class Task(BaseModel, Generic[TargetT]):
 
     @classmethod
     def get_namespace(cls) -> str:
-        if cls.__namespace__ is None:
-            raise ValueError("Namespace not set.")
-        return cls.__namespace__
+        return _REGISTER.get_task_family_and_namespace(cls)[1]
 
     @classmethod
     def get_family(cls) -> str:
-        return cls.__family__
+        return _REGISTER.get_task_family_and_namespace(cls)[0]
 
     @classmethod
     def get_namespace_family(cls) -> str:
-        if cls.get_namespace():  # NOTE: empty string is "no namespace"
-            return f"{cls.get_namespace()}.{cls.get_family()}"
-        return cls.get_family()
+        family, namespace = _REGISTER.get_task_family_and_namespace(cls)
+        return get_namespace_family(namespace=namespace, family=family)
 
     def complete(self) -> bool:
         """Check if the task is complete."""
