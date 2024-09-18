@@ -171,8 +171,12 @@ def auto_namespace(scope: str):
         ...
     ```
     """
-    module = scope.rstrip(".")
+    module = scope
     _REGISTER.add_module_namespace(module, module)
+
+
+def namespace(namespace: str, scope: str):
+    _REGISTER.add_module_namespace(scope, namespace)
 
 
 class TaskIDRef(BaseModel):
@@ -320,7 +324,8 @@ class Task(BaseModel, Generic[TargetT]):
 
     def _id_hash_jsonable(self) -> dict:
         return {
-            "task_family": self.get_family(),
+            "namespace": self.get_namespace(),
+            "family": self.get_family(),
             "parameters": {
                 name: config.id_hasher(getattr(self, name))
                 for name, config in self._param_configs.items()

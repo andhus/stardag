@@ -13,7 +13,7 @@ class AutoFSTTask(
     typing.Generic[LoadedT],
 ):
     @classmethod
-    def __pydantic_init_subclass__(cls, **kwargs: typing.Any) -> None:
+    def __pydantic_init_subclass__(cls, **kwargs: typing.Any) -> None:  # type: ignore
         super().__pydantic_init_subclass__(**kwargs)
         # get generic type of self
         loaded_t = typing.get_args(cls.__orig_class__)[0]
@@ -52,6 +52,7 @@ class AutoFSTTask(
                 part
                 for part in [
                     self._relpath_base,
+                    self.get_namespace().replace(".", "/"),
                     self.get_family(),
                     f"v{self.version}" if self.version else "",
                     self._relpath_extra,
