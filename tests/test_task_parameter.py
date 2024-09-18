@@ -21,13 +21,15 @@ def test_task_param():
     assert parent.model_dump() == {
         "version": None,
         "child": {
-            "__task_family": "ChildTask",
+            "__family__": "ChildTask",
+            "__namespace__": "",
             "version": None,
             "a": "A",
         },
     }
     assert parent._id_hash_jsonable() == {
-        "task_family": "ParentTask",
+        "namespace": "",
+        "family": "ParentTask",
         "parameters": {
             "version": None,
             "child": parent.child.task_id,
@@ -49,19 +51,22 @@ def test_set_of_task_params():
     assert parent_dict["version"] is None
     assert sorted(parent_dict["children"], key=lambda x: x["a"]) == [
         {
-            "__task_family": "ChildTask",
+            "__family__": "ChildTask",
+            "__namespace__": "",
             "version": None,
             "a": "A",
         },
         {
-            "__task_family": "ChildTask",
+            "__family__": "ChildTask",
+            "__namespace__": "",
             "version": None,
             "a": "B",
         },
     ]
     assert ParentTask2.model_validate_json(parent.model_dump_json()) == parent
     assert parent._id_hash_jsonable() == {
-        "task_family": "ParentTask2",
+        "namespace": "",
+        "family": "ParentTask2",
         "parameters": {
             "version": None,
             "children": sorted([child.task_id for child in parent.children]),
@@ -81,13 +86,15 @@ def test_task_loads():
     assert parent.model_dump() == {
         "version": None,
         "child": {
-            "__task_family": "ChildTask",
+            "__family__": "ChildTask",
+            "__namespace__": "",
             "version": None,
             "a": "A",
         },
     }
     assert parent._id_hash_jsonable() == {
-        "task_family": "ParentTask3",
+        "namespace": "",
+        "family": "ParentTask3",
         "parameters": {
             "version": None,
             "child": parent.child.task_id,

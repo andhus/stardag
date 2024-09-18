@@ -1,12 +1,14 @@
 from dcdag.auto_task import AutoFSTTask
 from dcdag.target import LoadableTarget
-from dcdag.task import Task
+from dcdag.task import Task, auto_namespace
 from dcdag.task_parameter import TaskParam
 
-TestTaskLeafLoadedT = dict[str, str | int | None]
+LeafTaskLoadedT = dict[str, str | int | None]
+
+auto_namespace(__name__)
 
 
-class TestTaskLeaf(AutoFSTTask[TestTaskLeafLoadedT]):
+class LeafTask(AutoFSTTask[LeafTaskLoadedT]):
     param_a: int
     param_b: str
 
@@ -14,14 +16,14 @@ class TestTaskLeaf(AutoFSTTask[TestTaskLeafLoadedT]):
         self.output().save(self.model_dump(mode="json"))
 
 
-TestTaskParentLoadedT = dict[str, list[TestTaskLeafLoadedT]]
+ParentTaskLoadedT = dict[str, list[LeafTaskLoadedT]]
 
 
-class TestTaskParent(AutoFSTTask[TestTaskParentLoadedT]):
+class ParentTask(AutoFSTTask[ParentTaskLoadedT]):
     param_ab_s: list[tuple[int, str]]
 
     def requires(self):
-        return [TestTaskLeaf(param_a=a, param_b=b) for a, b in self.param_ab_s]
+        return [LeafTask(param_a=a, param_b=b) for a, b in self.param_ab_s]
 
     def run(self):
         self.output().save(
@@ -29,11 +31,11 @@ class TestTaskParent(AutoFSTTask[TestTaskParentLoadedT]):
         )
 
 
-TestTaskRootLoadedT = dict[str, TestTaskParentLoadedT]
+RootTaskLoadedT = dict[str, ParentTaskLoadedT]
 
 
-class TestTaskRoot(AutoFSTTask[TestTaskRootLoadedT]):
-    parent_task: TaskParam[Task[LoadableTarget[TestTaskParentLoadedT]]]
+class RootTask(AutoFSTTask[RootTaskLoadedT]):
+    parent_task: TaskParam[Task[LoadableTarget[ParentTaskLoadedT]]]
 
     def requires(self):
         return self.parent_task
@@ -43,8 +45,8 @@ class TestTaskRoot(AutoFSTTask[TestTaskRootLoadedT]):
 
 
 def get_simple_dag():
-    return TestTaskRoot(
-        parent_task=TestTaskParent(param_ab_s=[(1, "a"), (2, "b")]),
+    return RootTask(
+        parent_task=ParentTask(param_ab_s=[(1, "a"), (2, "b")]),
     )
 
 

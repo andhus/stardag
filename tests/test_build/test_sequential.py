@@ -3,13 +3,13 @@ import typing
 
 from dcdag.build import sequential
 from dcdag.target import InMemoryFileSystemTarget
-from dcdag.utils.testing import TestTaskRoot, TestTaskRootLoadedT
+from dcdag.utils.testing.simple_dag import RootTask, RootTaskLoadedT
 
 
 def test_build_simple_dag(
     default_in_memory_fs_target: typing.Type[InMemoryFileSystemTarget],
-    simple_dag: TestTaskRoot,
-    simple_dag_expected_root_output: TestTaskRootLoadedT,
+    simple_dag: RootTask,
+    simple_dag_expected_root_output: RootTaskLoadedT,
 ):
     sequential.build(simple_dag)
     assert simple_dag.output().load() == simple_dag_expected_root_output

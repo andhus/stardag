@@ -10,6 +10,7 @@ import pandas as pd
 
 from dcdag.build.sequential import build as build_sequential
 from dcdag.decorator import Depends, task
+from dcdag.task import namespace
 
 from .base import (
     DatasetFilter,
@@ -29,13 +30,14 @@ from .base import (
 
 logger = logging.getLogger(__name__)
 
+namespace("examples.ml_pipeline.decorator_api", scope=__name__)
 
-base_task = partial(task, version="0", relpath_base="examples/ml_pipeline")
+base_task = partial(task, version="0")
 
 
 @base_task(
     relpath=lambda self: (
-        f"{self._relpath_base}/DumpData/v{self.version}/{self.date}/"  # type: ignore
+        f"dump/v{self.version}/{self.date}/"  # type: ignore
         f"{self.snapshot_slug}.pkl"  # type: ignore
     )
 )

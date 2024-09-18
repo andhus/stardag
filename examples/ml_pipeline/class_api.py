@@ -13,6 +13,7 @@ from traitlets import Any
 from dcdag.auto_task import AutoFSTTask
 from dcdag.build.sequential import build as build_sequential
 from dcdag.target import LoadedT
+from dcdag.task import namespace
 from dcdag.task_parameter import TaskLoads
 
 from .base import (
@@ -35,13 +36,12 @@ from .base import (
 logger = logging.getLogger(__name__)
 
 
+namespace("examples.ml_pipeline.class_api", scope=__name__)
+
+
 class ExamplesMLPipelineBase(AutoFSTTask[LoadedT], typing.Generic[LoadedT]):
     __version__ = "0"
     version: str | None = __version__
-
-    @property
-    def _relpath_base(self) -> str:
-        return "examples/ml_pipeline"
 
 
 class Dump(ExamplesMLPipelineBase[pd.DataFrame]):

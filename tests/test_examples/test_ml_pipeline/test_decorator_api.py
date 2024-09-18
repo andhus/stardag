@@ -8,6 +8,9 @@ def test_build_metrics_dag(default_in_memory_fs_target, examples_in_sys_path):
     metrics = get_metrics_dag()
     assert isinstance(metrics._serializer, JSONSerializer)
     assert metrics.output().path.endswith(".json")
+    assert metrics.output().path.startswith(
+        "in-memory://examples/ml_pipeline/decorator_api/metrics/v0/"
+    )
     assert isinstance(metrics.predictions._serializer, PandasDataFrameCSVSerializer)
     assert metrics.predictions.output().path.endswith(".csv")
     build_sequential(metrics)
