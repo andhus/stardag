@@ -20,14 +20,14 @@ from pydantic import BaseModel, Field
 from pydantic.fields import FieldInfo
 from typing_extensions import List, TypeAlias, Union
 
-from dcdag.parameter import (
+from stardag.parameter import (
     IDHasher,
     IDHasherABC,
     IDHashInclude,
     IDHashIncludeABC,
     _ParameterConfig,
 )
-from dcdag.target import Target
+from stardag.target import Target
 
 logger = logging.getLogger(__name__)
 

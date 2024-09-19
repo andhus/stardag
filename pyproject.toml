@@ -1,9 +1,9 @@
 [tool.poetry]
-name = "dc-dag"
+name = "stardag"
 version = "0.0.1"
 description = ""
 authors = ["Anders Huss <andhus@kth.se>"]
-packages = [{ include = "dcdag", from = "src" }]
+packages = [{ include = "stardag", from = "src" }]
 
 
 [tool.poetry.dependencies]
@@ -18,8 +18,13 @@ pytest-asyncio = "^0.23.7"
 ipdb = "^0.13.13"
 
 
-[tool.poetry.extras]
-examples-ml-pipeline = ["pandas", "scikit-learn", "numpy"]
+[tool.poetry.group.examples-ml-pipeline]
+optional = true
+
+[tool.poetry.group.examples-ml-pipeline.dependencies]
+pandas = "*"
+scikit-learn = "*"
+numpy = "*"
 
 
 [build-system]

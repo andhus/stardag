@@ -1,8 +1,8 @@
 import typing
 from pathlib import Path
 
-from dcdag.target import FileSystemTarget, LocalTarget
-from dcdag.task import Task
+from stardag.target import FileSystemTarget, LocalTarget
+from stardag.task import Task
 
 
 @typing.runtime_checkable

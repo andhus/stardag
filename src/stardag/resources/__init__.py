@@ -1,7 +1,7 @@
-from dcdag.resources.resource_provider import resource_provider
-from dcdag.resources.target_factory import _DEFAULT_TARGET_ROOT_KEY, TargetFactory
-from dcdag.target import FileSystemTarget
-from dcdag.task import Task
+from stardag.resources.resource_provider import resource_provider
+from stardag.resources.target_factory import _DEFAULT_TARGET_ROOT_KEY, TargetFactory
+from stardag.target import FileSystemTarget
+from stardag.task import Task
 
 target_factory_provider = resource_provider(
     type_=TargetFactory, default_factory=TargetFactory

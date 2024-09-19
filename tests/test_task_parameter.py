@@ -1,5 +1,5 @@
-from dcdag.auto_task import AutoFSTTask
-from dcdag.task_parameter import TaskLoads, TaskParam, TaskSet
+from stardag.auto_task import AutoFSTTask
+from stardag.task_parameter import TaskLoads, TaskParam, TaskSet
 
 
 class ChildTask(AutoFSTTask[str]):

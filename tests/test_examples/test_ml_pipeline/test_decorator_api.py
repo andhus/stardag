@@ -1,7 +1,15 @@
-from dcdag.build.sequential import build as build_sequential
-from dcdag.target.serialize import JSONSerializer, PandasDataFrameCSVSerializer
+import pytest
+
+from stardag.build.sequential import build as build_sequential
+from stardag.target.serialize import JSONSerializer, PandasDataFrameCSVSerializer
+
+try:
+    import pandas as pd
+except ImportError:
+    pd = None
 
 
+@pytest.mark.skipif(pd is None, reason="pandas is not installed")
 def test_build_metrics_dag(default_in_memory_fs_target, examples_in_sys_path):
     from ml_pipeline.decorator_api import get_metrics_dag  # type: ignore
 
