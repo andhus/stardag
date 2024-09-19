@@ -2,8 +2,8 @@ import typing
 
 import pytest
 
-from dcdag.target._base import FileSystemTarget
-from dcdag.target.serialize import (
+from stardag.target._base import FileSystemTarget
+from stardag.target.serialize import (
     DataFrame,
     JSONSerializer,
     PandasDataFrameCSVSerializer,

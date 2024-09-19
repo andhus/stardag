@@ -1,9 +1,9 @@
 import typing
 
-from dcdag.resources import get_target
-from dcdag.target import LoadableSaveableFileSystemTarget, Serializable
-from dcdag.target.serialize import get_serializer
-from dcdag.task import Task
+from stardag.resources import get_target
+from stardag.target import LoadableSaveableFileSystemTarget, Serializable
+from stardag.target.serialize import get_serializer
+from stardag.task import Task
 
 LoadedT = typing.TypeVar("LoadedT")
 

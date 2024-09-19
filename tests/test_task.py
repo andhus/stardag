@@ -2,16 +2,16 @@ import typing
 
 import pytest
 
-from dcdag.auto_task import AutoFSTTask
-from dcdag.parameter import (
+from stardag.auto_task import AutoFSTTask
+from stardag.parameter import (
     IDHasher,
     IDHashExclude,
     IDHashInclude,
     _ParameterConfig,
     always_include,
 )
-from dcdag.task import _REGISTER, Task, get_namespace_family
-from dcdag.utils.testing.namepace import (
+from stardag.task import _REGISTER, Task, get_namespace_family
+from stardag.utils.testing.namepace import (
     ClearNamespaceByArg,
     ClearNamespaceByDunder,
     CustomFamilyByArgFromIntermediate,
@@ -26,7 +26,7 @@ from dcdag.utils.testing.namepace import (
     OverrideNamespaceByDUnderChild,
     UnspecifiedNamespace,
 )
-from dcdag.utils.testing.simple_dag import LeafTask
+from stardag.utils.testing.simple_dag import LeafTask
 
 
 class MockTask(AutoFSTTask[str]):
@@ -46,13 +46,16 @@ def test_parameter():
     )
 
 
+_testing_module = "stardag.utils.testing"
+
+
 @pytest.mark.parametrize(
     "task_class,expected_namespace_family",
     [
         # namespace
         (MockTask, "MockTask"),
-        (LeafTask, "dcdag.utils.testing.simple_dag.LeafTask"),
-        (UnspecifiedNamespace, "dcdag.utils.testing.UnspecifiedNamespace"),
+        (LeafTask, f"{_testing_module}.simple_dag.LeafTask"),
+        (UnspecifiedNamespace, f"{_testing_module}.UnspecifiedNamespace"),
         # namespace override by dunder
         (OverrideNamespaceByDUnder, "override_namespace.OverrideNamespaceByDUnder"),
         (ClearNamespaceByDunder, "ClearNamespaceByDunder"),
@@ -65,21 +68,21 @@ def test_parameter():
         (ClearNamespaceByArg, "ClearNamespaceByArg"),
         (
             OverrideNamespaceByArgChild,
-            "dcdag.utils.testing.OverrideNamespaceByArgChild",
+            f"{_testing_module}.OverrideNamespaceByArgChild",
         ),
         # family override
-        (CustomFamilyByArgFromIntermediate, "dcdag.utils.testing.custom_family"),
+        (CustomFamilyByArgFromIntermediate, f"{_testing_module}.custom_family"),
         (
             CustomFamilyByArgFromIntermediateChild,
-            "dcdag.utils.testing.CustomFamilyByArgFromIntermediateChild",
+            f"{_testing_module}.CustomFamilyByArgFromIntermediateChild",
         ),
-        (CustomFamilyByArgFromTask, "dcdag.utils.testing.custom_family_2"),
+        (CustomFamilyByArgFromTask, f"{_testing_module}.custom_family_2"),
         (
             CustomFamilyByArgFromTaskChild,
-            "dcdag.utils.testing.CustomFamilyByArgFromTaskChild",
+            f"{_testing_module}.CustomFamilyByArgFromTaskChild",
         ),
-        (CustomFamilyByDUnder, "dcdag.utils.testing.custom_family_3"),
-        (CustomFamilyByDUnderChild, "dcdag.utils.testing.custom_family_3_child"),
+        (CustomFamilyByDUnder, f"{_testing_module}.custom_family_3"),
+        (CustomFamilyByDUnderChild, f"{_testing_module}.custom_family_3_child"),
     ],
 )
 def test_auto_namespace(task_class: typing.Type[Task], expected_namespace_family):

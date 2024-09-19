@@ -4,8 +4,8 @@ import typing
 
 from pydantic import PydanticSchemaGenerationError, TypeAdapter
 
-from dcdag.resources.resource_provider import resource_provider
-from dcdag.target._base import (
+from stardag.resources.resource_provider import resource_provider
+from stardag.target._base import (
     FileSystemTarget,
     FileSystemTargetHandle,
     LoadableSaveableFileSystemTarget,
@@ -15,17 +15,14 @@ from dcdag.target._base import (
     WritableFileSystemTargetHandle,
 )
 
-if typing.TYPE_CHECKING:
-    DataFrame = typing.Annotated[typing.Any, "pandas.DataFrame placeholder"]
+try:
+    from pandas import DataFrame as DataFrame  # type: ignore
+    from pandas import read_csv as pd_read_csv  # type: ignore
+except ImportError:
+
+    class DataFrame: ...
 
     def pd_read_csv(*args, **kwargs): ...
-
-else:
-    try:
-        from pandas import DataFrame as DataFrame
-        from pandas import read_csv as pd_read_csv
-    except ImportError:
-        pass
 
 
 @typing.runtime_checkable

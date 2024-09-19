@@ -1,4 +1,4 @@
-from dcdag.target._base import (
+from stardag.target._base import (
     FileSystemTarget,
     LoadableSaveableFileSystemTarget,
     LoadableSaveableTarget,
@@ -8,8 +8,8 @@ from dcdag.target._base import (
     SaveableTarget,
     Target,
 )
-from dcdag.target._in_memory import InMemoryFileSystemTarget, InMemoryTarget
-from dcdag.target.serialize import Serializable
+from stardag.target._in_memory import InMemoryFileSystemTarget, InMemoryTarget
+from stardag.target.serialize import Serializable
 
 __all__ = [
     "FileSystemTarget",

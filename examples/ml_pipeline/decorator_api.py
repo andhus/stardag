@@ -8,9 +8,9 @@ from pathlib import Path
 
 import pandas as pd
 
-from dcdag.build.sequential import build as build_sequential
-from dcdag.decorator import Depends, task
-from dcdag.task import namespace
+from stardag.build.sequential import build as build_sequential
+from stardag.decorator import Depends, task
+from stardag.task import namespace
 
 from .base import (
     DatasetFilter,

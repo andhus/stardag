@@ -1,4 +1,4 @@
-# `DC-DAG` Declarative Composable DAG
+# `*DAG` / `stardag` - Declarative Composable DAGs
 
 Ascendent of luigi, emphasis on representing Assets and their dependencies as a declarative and composable Directed Acyclic Graph.
 
@@ -64,7 +64,7 @@ Main idea
   - [ ] ~~Extend Interface of Serializer to have `.init(annotation)` after initialization -> This way you can set additional tuning parameters up front (without partials), and compose serializers (see below: `GZip(JSON())`) and property~~
   - [x] `default_ext: str`
   - [x] Make serializer initialization happen on task declaration for early errors! Use `__pydantic_init_subclass__`
-  - [ ] Allow specifying explicit serializer: `AutoTask[Feather[pd.DataFrame]]` = `AutoTask[Annotated[pd.DataFrame, PandasFeatherSerializer()]]`
+  - [x] Allow specifying explicit serializer: `AutoTask[Feather[pd.DataFrame]]` = `AutoTask[Annotated[pd.DataFrame, PandasFeatherSerializer()]]`
   - [ ] Defaults for:
     - [x] anything JSONAble (pydantic)
     - [x] pd.DataFrame
@@ -79,7 +79,7 @@ Main idea
 - [ ] `ml_pipeline` example
   - [ ] Make output from class_api and decorator_api equivalent
   - [ ] Add units test (compare state of InMemoryTarget)
-  - [ ] Blocked by some serialization fixes
+  - [x] Blocked by some serialization fixes
 
 ### Execution
 

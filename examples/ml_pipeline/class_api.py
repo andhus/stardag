@@ -10,11 +10,11 @@ import pandas as pd
 from pydantic import Field
 from traitlets import Any
 
-from dcdag.auto_task import AutoFSTTask
-from dcdag.build.sequential import build as build_sequential
-from dcdag.target import LoadedT
-from dcdag.task import namespace
-from dcdag.task_parameter import TaskLoads
+from stardag.auto_task import AutoFSTTask
+from stardag.build.sequential import build as build_sequential
+from stardag.target import LoadedT
+from stardag.task import namespace
+from stardag.task_parameter import TaskLoads
 
 from .base import (
     DatasetFilter,

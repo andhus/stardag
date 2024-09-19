@@ -1,8 +1,8 @@
 import pytest
 
-from dcdag.decorator import Depends, task
-from dcdag.target import LoadableTarget
-from dcdag.task import Task
+from stardag.decorator import Depends, task
+from stardag.target import LoadableTarget
+from stardag.task import Task
 
 
 def test_basic(default_in_memory_fs_target):
