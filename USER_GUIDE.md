@@ -9,7 +9,7 @@ See also `./examples` folder.
 - Abstraction over the filesystem: The target location of any asset is deterministically determined by its input parameters, _before_ it has been executed.
 - Each Asset has a self-contained representation of its entire upstream dependency tree -> great for reducing complexity and composability.
 - Declarative: Concurrency and execution can be planned separately. has its limitations, but no framework gives it a ambitious go...
-- `make`/`luigi` style bottom up execution
+- `Makefile`/`luigi` style bottom up execution
 - Typesafe/hints, leverage pythons ecosystem around types...
 
 ## The Three Levels of the Task-API
@@ -113,3 +113,23 @@ In short:
 - The decorator API can be used when defining a task for which all upstream dependencies are _injected_ as "task parameters". Sane defaults and type annotations are leverage to infer target location and serialization.
 - The `AutoFSTTask` should be used when upstream dependencies (output of `.requires()`) needs to be _computed_ based on task input parameters. Most things, like the target path, are still easily tweakable by overriding properties/methods of the `AutoFSTTask`.
 - The base `Task` should be used when we want full flexibility and/or use non-filesystem target (like a row in a DB for example).
+
+## Filesystem Targets
+
+...
+
+### Serialization
+
+...
+
+## Parameter Hashing -> `task_id`
+
+...
+
+### Recursive Hashing of Tasks as Parameters
+
+...
+
+## Execution
+
+...

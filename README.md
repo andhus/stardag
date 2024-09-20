@@ -70,6 +70,8 @@ print(res)
 # 45
 ```
 
+See the [`USER_GUIDE.md`](./USER_GUIDE.md) for further details.
+
 ## Why yet another Python DAG-framework?
 
 Luigi is extremely powerful in its simplicity, but outdated. Most modern frameworks makes a point out of being fully flexible and dynamic "just annotate any python function as a task and go..." kind of. `stardag` takes a different approach; the power of a framework is when it is helping the user to code - and even think - in a way that helps you reduce complexity and provides a structured way of doing things.
@@ -99,7 +101,7 @@ The clean declarative DAG abstraction, for when it is the best option. This is o
 
 - work with large files
 - care deeply about reproducibility and explicit asset dependencies
-- want [Make](https://www.gnu.org/software/make/)-style bottom up" execution
+- want [Makefile](https://www.gnu.org/software/make/)-style bottom up" execution
 
 ### Comparison
 
@@ -111,7 +113,11 @@ Has assets and their lineage as first class citizens, but they are not generally
 
 #### Prefect
 
-Only has the notion of task (run) dependencies _after the fact_, when tasks have ran. No bottom up execution - in this case you are advised manage the persistent target outside of the primary framework. This is exactly what you need something like luigi or stardag for (non-trivial to scale). The lack of bottom up execution also makes the built-in caching mechanism - hashing of actual input _data_ instead of the declarative specification of dito - extremely inefficient in common cases.
+Only has the notion of task (run) dependencies _after the fact_, when tasks have ran. No bottom up execution - [in this case you are advised manage the persistent target outside of the primary framework](https://discourse.prefect.io/t/how-to-use-targets-to-cache-task-run-results-based-on-a-presence-of-a-specific-file-i-e-how-to-use-makefile-or-luigi-type-file-based-caching/520). This is exactly what you need something like luigi or stardag for (non-trivial to scale). The lack of bottom up execution also makes the built-in caching mechanism - hashing of actual input _data_ instead of the declarative specification of dito - extremely inefficient in common cases.
+
+Related issues:
+
+- [Task writes file - can this file be cached?](https://discourse.prefect.io/t/task-writes-file-can-this-file-be-cached/3796/1)
 
 (TODO: add concrete example)
 
@@ -124,6 +130,6 @@ See [Composition over inheritance](https://en.wikipedia.org/wiki/Composition_ove
 Summary:
 
 - No built-in parameter (hashing and serialization is not trivial) for data classes/pydantic models, promotes a _flat_ parameter set (because of emphasis of CLI triggering?)
-- No built-in parameter for a Task _instance_ (which is the obvious way to achive composability) and not trivial to implement (again: serialization and hashing).
+- No built-in parameter for a Task _instance_ (which is the obvious way to achieve composability) and not trivial to implement (again: serialization and hashing).
 - `requires`/`inherits` promotes inheritance, where composability is a clearly superior abstraction in most cases.
 - Lack of modern type hinting, which is helpful to support composability.
