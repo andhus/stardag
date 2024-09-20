@@ -1,166 +1,135 @@
-# `*DAG` / `stardag` - Declarative Composable DAGs
+# `*DAG` - Declarative & Composable DAGs
 
-Ascendent of luigi, emphasis on representing Assets and their dependencies as a declarative and composable Directed Acyclic Graph.
+`stardag`'s primary objective is to provide a clean Python API for representing persistently stored assets - the code that produce them and their dependencies - as a declarative Directed Acyclic Graph (DAG). As such, it is a natural descendant of [Luigi](https://github.com/spotify/luigi). It emphasizes ease of use and _composability_.
 
-Why? Luigi was extremely powerful in its simplicity. Most modern frameworks makes a point out of being fully flexible and dynamic "just annotate any python function as a task and go..." kind of. `DC-DAG` takes a very different approach; the power of a framework is when it is helping (/forcing) the user to code - and even think - in a way that helps you reduce complexity and do things in one way. `Makse
+Stardag is built on top of, any integrates well with, Pydantic and utilizes expressive type annotations to reduce boilerplate and clarify io-contracts of tasks.
 
-Assets at the core
+## Getting started
 
-Why Named Asset and Not Task: A class is typically named after what _an instance_ of it is. A task it what maps a set of inputs. Prefect correctly uses the term `task`: an instance returns assets when called on inputs.
+### Installation
 
-Where luigi came short:
+```sh
+pip install stardag
+```
 
-- As an SDK -> Composabillity! Solved by allowing assets(/tasks) as inputs(/parameters).
-- Orchestration and execution: Made no attempt at infra... Scheduler ran slow.
+### Hello World
+
+```python
+from stardag.decorator import Depends, task
+
+@task
+def get_range(limit: int) -> list[int]:
+    return list(range(limit))
+
+@task
+def get_sum(integers: Depends[list[int]]) -> int:
+    return sum(integers)
+
+# Declarative/"lazy" specification of DAG, no computation yet.
+task = get_sum(integers=get_range(limit=10))
+
+print(repr(task))
+# get_sum(version='0', integers=get_range(version='0', limit=10))
+print(repr(task.requires()))
+# {'integers': get_range(version='0', limit=10)}
+print(task.output().path)
+# /path/to/stardag-target-roots/default/get_sum/v0/8f/ea/8fea194424a5b2acaa03b0b53fb228b60b2a5ac6.json'
+print(task.complete())
+# False
+
+# Materialize task targets
+from stardag.build.sequential import build
+
+build(task)
+# ...
+
+print(task.complete())
+# True
+
+print(task.output().load())
+# 45
+
+# `task` is a Pydantic `BaseModel`
+from pydantic import BaseModel
+assert isinstance(task, BaseModel)
+print(task.model_dump_json(indent=2))
+# {
+#   "version": "0",
+#   "integers": {
+#     "version": "0",
+#     "limit": 10,
+#     "__family__": "get_range",
+#     "__namespace__": ""
+#   }
+# }
+
+
+# Call original functions, no targets persisted
+res = get_sum.call(get_range.call(10))
+print(res)
+# 45
+```
+
+See the [`USER_GUIDE.md`](./USER_GUIDE.md) for further details.
+
+## Why yet another Python DAG-framework?
+
+Luigi is extremely powerful in its simplicity, but outdated. Most modern frameworks makes a point out of being fully flexible and dynamic "just annotate any python function as a task and go..." kind of. `stardag` takes a different approach; the power of a framework is when it is helping the user to code - and even think - in a way that helps you reduce complexity and provides a structured way of doing things.
+
+That said, the declarative DAG abstraction is _not_ suitable for all data processing/workflows, that's why it is `stardag`s ambition to be _interoperable_ with other modern data workflow frameworks (Prefect, Dagster, Modal, ...) that lacks a clean enough declarative DAG abstraction, both as an sdk and at the execution layer.
+
+## Why not just use Luigi then?
+
+A lot has happened in the ecosystem since Luigi was created and it is not really under active development. In my opinion, where luigi falls short as an SDK is in its _lack of composability_ of Tasks; promoting tightly coupled DAGs and "parameter explosion" a classical case of ["Composition over inheritance"](#composability-ftw)
+
+- As an SDK -> _Composability_! (Solved by allowing tasks as inputs(/parameters).
+- Orchestration and execution: Made intentionally no attempt at orchestration... Scheduler ran slow etc.
+- Minimalistic (for good and bad) a lot of boilerplate to get it "production ready".
 
 Adds:
 
-- Opinionated Best practices build in (minimal boilerplate)
+- Opinionated best practices out of the box (minimal boilerplate)
 - yet fully tweakable
 - modern complete type hints
 - execution framework agnostic
-- async tasks
-- in memory caching
+- (planned: asyncio tasks)
+- (planned: in memory caching)
 
-Comparison
+## What's missing in modern data workflow frameworks?
 
-Dagster: has assets but the are not generally parametrizable
-Prefect: No real concept of assets. Task execution is tracked not assets. Each task is not self contained represetation of its dependencies.
+The clean declarative DAG abstraction, for when it is the best option. This is often the case in Machine Learning development or generally when we:
 
-Main idea
+- work with large files
+- care deeply about reproducibility and explicit asset dependencies
+- want [Makefile](https://www.gnu.org/software/make/)-style bottom up" execution
 
-- Abstraction over the filesystem: The target location of any asset is deterministically determined by its input parameters, _before_ it has been executed.
-- Each Assset has a self-contained representation of its entire upstream dependency tree -> great for reducing complexity and composability.
-- Declarative: Concurrency and execution can be planned separately. has its limitiations, but no framework gives it a ambitious go...
-- `make`/`luigi` style
-- Typesafe/hints, leverage pythons ecosystem around types...
+### Comparison
 
-## TODO
+#### Dagster
 
-### Basics
+Has assets and their lineage as first class citizens, but they are not generally parametrizable (requires convolved factory pattern) also tightly coupled to the "platform".
 
-- [x] Rename back to `Task` and `task_id`
-- [x] Move `.load()` to Target (!) -> Generic only in target, See Notes!
-- [ ] ~~Add `context` to output, run, requires~~
-- [x] Use annotation instead of json_schema-hack to pass extra info about parameters
-- [ ] basic unit testing
-  - [ ] Add fixture for auto clearing the registry
-  - [ ] Add testing util for registering tasks defined outside of test function
-- [ ] Basic heuristic for run-time type checking of Generic type in TaskParams
-- [ ] Express dynamic deps explicitly (Generic: Task[TargetT, RunT], StaticTask, -> NO just type annotate as union in base class.
-      DynamicTask) or just class variable `has_dynamic_dependencies: bool` (possible to
-      overload type hints on this? Yes: <https://stackoverflow.com/questions/70136046/can-you-type-hint-overload-a-return-type-for-a-method-based-on-an-argument-passe>
-      but probably overkill)
+(TODO explain with examples).
 
-### Features
+#### Prefect
 
-- [ ] FileSystemTargets
-  - [ ] Atomic Writes (copy luigi approach?)
-  - [ ] S3
-  - [ ] GS
-- [x] Serialization -> AutoTask
-  - [x] Module structure
-    - [x] Rename to just `AutoTask`?
-  - [ ] ~~Extend Interface of Serializer to have `.init(annotation)` after initialization -> This way you can set additional tuning parameters up front (without partials), and compose serializers (see below: `GZip(JSON())`) and property~~
-  - [x] `default_ext: str`
-  - [x] Make serializer initialization happen on task declaration for early errors! Use `__pydantic_init_subclass__`
-  - [x] Allow specifying explicit serializer: `AutoTask[Feather[pd.DataFrame]]` = `AutoTask[Annotated[pd.DataFrame, PandasFeatherSerializer()]]`
-  - [ ] Defaults for:
-    - [x] anything JSONAble (pydantic)
-    - [x] pd.DataFrame
-    - [ ] pd.Series
-    - [ ] numpy array
-    - [x] Fallback on Pickle
-  - [ ] (`GZip[JSON[dict[str, str]]]` = `GZipJSON[dict[str, str]]` = `Annotated[dict[str, str], GZip(JSON())]` ?)
-  - [ ] Set `.ext` based on serializer. I.e. add `_relpath_ext` as a property, which by default reads from self.serializer.default_ext
-- [ ] function decorator API
-  - [x] PoC
-  - [x] basic unit tests
-- [ ] `ml_pipeline` example
-  - [ ] Make output from class_api and decorator_api equivalent
-  - [ ] Add units test (compare state of InMemoryTarget)
-  - [x] Blocked by some serialization fixes
+Only has the notion of task (run) dependencies _after the fact_, when tasks have ran. No bottom up execution - [in this case you are advised manage the persistent target outside of the primary framework](https://discourse.prefect.io/t/how-to-use-targets-to-cache-task-run-results-based-on-a-presence-of-a-specific-file-i-e-how-to-use-makefile-or-luigi-type-file-based-caching/520). This is exactly what you need something like luigi or stardag for (non-trivial to scale). The lack of bottom up execution also makes the built-in caching mechanism - hashing of actual input _data_ instead of the declarative specification of dito - extremely inefficient in common cases.
 
-### Execution
+Related issues:
 
-- [x] Basic sequential
-- [ ] Luigi runner?
-- [ ] Prefect runner
-- [ ] Modal runner (+ "deployment")
+- [Task writes file - can this file be cached?](https://discourse.prefect.io/t/task-writes-file-can-this-file-be-cached/3796/1)
 
-### Release
+(TODO: add concrete example)
 
-- [ ] repo and package name (`stardag`, `*dag`, :star: dag)
-- [ ] PyPI name
-- [ ] Github Workflows
-- [ ] unit test (tox??) with poetry
-- [ ] Relase package with poetry spec.?
-- [ ] Cleanup README, basic Docs and overview of core features
+## Composability FTW
 
-## Notes
+See [Composition over inheritance](https://en.wikipedia.org/wiki/Composition_over_inheritance)
 
-### Types and "API"
+### Lack of Composability in Luigi
 
-Put all loading under Target, all targets load something, None
+Summary:
 
-So base target has load and exits
-
-TGT[LoadT]
-
-FSTGT also has open(r/w)
-
-FSTGT[LoadT, StreamT]
-
-FSTGT base class takes serialiser as arg, should comply with but does not affect generic types. It could additionally specify the file format with just some Annotated[StreamT, …]
-
-TaskParam should if possible support (only!) target protocols, consuming task should only care about LoadT and/or StreamT
-
-Rename back Asset to Task, the target is the asset.
-
-The reason to move load to target is
-
-- cleaner types
-- Asset vs task…
-- All targets can be created via target manager
-
-Target = TargetManager.get_fs_tgt(task=self, path, root_key)
-
-Can manage roots but also IN MEMORY caches based on the task instances. Can be configured per run…
-
-FDF = Annotated[pd.DataFrame, Feather]
-
-Autoinfer target from generic, should be possible:)
-
-DFFeather = Annotated[bytes, DFFeatherSerializer]
-
-Class MyTask(
-Task[FST[pd.DataFrame, DFFeather]
-):
-…
-
-Class Dowstream(Task[…]):
-task: TaskParam[TGT[pd.DataFrame]]
-
-FST[PydanticModel, JSONStr]
-
-## Functional API
-
-```python
-
-@task
-def df_transform(
-      param_a: int,
-      df: Depends[pd.DataFrame],
-) -> pd.DataFrame:
-      return df * param_a
-
-root_task = df_transform.init(param_a=2, df=get_df.init(url=""))
-
-@compose
-def dag(
-    param_a,
-    url,
-):
-    return df_transform(param_a=param_a, df=get_df(url))
-
-```
+- No built-in parameter (hashing and serialization is not trivial) for data classes/pydantic models, promotes a _flat_ parameter set (because of emphasis of CLI triggering?)
+- No built-in parameter for a Task _instance_ (which is the obvious way to achieve composability) and not trivial to implement (again: serialization and hashing).
+- `requires`/`inherits` promotes inheritance, where composability is a clearly superior abstraction in most cases.
+- Lack of modern type hinting, which is helpful to support composability.
