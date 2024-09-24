@@ -80,7 +80,7 @@ That said, the declarative DAG abstraction is _not_ suitable for all data proces
 
 ## Why not just use Luigi then?
 
-A lot has happened in the ecosystem since Luigi was created and it is not really under active development. In my opinion, where luigi falls short as an SDK is in its _lack of composability_ of Tasks; promoting tightly coupled DAGs and "parameter explosion" a classical case of ["Composition over inheritance"](#composability-ftw). The core luigi API is also rather minimalistic (for good and bad) and it requires quite some boilerplate to get it "production ready", e.g. how to configure the .
+A lot has happened in the ecosystem since Luigi was created and it is not really under active development. In my opinion, where luigi falls short as an SDK is in its _lack of composability_ of Tasks; promoting tightly coupled DAGs and "parameter explosion" a classical case of ["Composition over inheritance"](#composability-ftw). The core luigi API is also rather minimalistic (for good and bad) and it requires quite some boilerplate to get it "production ready", e.g. how to seamlessly switch between local and remote storage of targets etc.
 
 - Orchestration and execution: Made intentionally no attempt at orchestration... Scheduler ran slow etc.
 - Minimalistic (for good and bad) a lot of boilerplate to get it "production ready".
