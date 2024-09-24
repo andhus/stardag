@@ -156,7 +156,13 @@ expression = add(
     ),
 )
 
-print(repr(expression))
+build(expression)
+result = expression.output().load()
+print(result)
+# 10.0
+
+# Serialization:
+print(expression.model_dump_json(indent=2))
 # {
 #   "version": "0",
 #   "a": {
@@ -180,16 +186,26 @@ print(repr(expression))
 #     "__namespace__": ""
 #   }
 # }
-build(expression)
-result = expression.output().load()
-print(result)
-# 10.0
+
+# Parameter hashing
+print(expression._id_hash_jsonable())
+# {'namespace': '',
+#  'family': 'add',
+#  'parameters': {'version': '0',
+#   'a': '5133f0a7861a76ca3ea57e53036381006ca73153',
+#   'b': '251f1deeac5f21035fdaaffe95fd4e351ea8cd9b'}}
+print(expression.requires()["b"]._id_hash_jsonable())
+# {'namespace': '',
+#  'family': 'subtract',
+#  'parameters': {'version': '0',
+#   'a': 'fd9ef94177202229500d7816c88fad4044e49b74',
+#   'b': 5.0}}
 ```
 
 To make this work, we need two things:
 
-- "Recursive" hashing of parameters; naturally the hash producing the task id of the consuming task should include the task id of the input task
 - Support for polymorphism in serialization; we need to be able to serialize and deserialize any task.
+- "Recursive" hashing of parameters; naturally the hash producing the task id of the consuming task should include the task id of the input task
 
 ### Lack of Composability in Luigi
 
