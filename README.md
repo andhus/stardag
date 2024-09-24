@@ -80,10 +80,7 @@ That said, the declarative DAG abstraction is _not_ suitable for all data proces
 
 ## Why not just use Luigi then?
 
-A lot has happened in the ecosystem since Luigi was created and it is not really under active development. In my opinion, where luigi falls short as an SDK is in its _lack of composability_ of Tasks; promoting tightly coupled DAGs and "parameter explosion" a classical case of ["Composition over inheritance"](#composability-ftw). The core luigi API is also rather minimalistic (for good and bad) and it requires quite some boilerplate to get it "production ready", e.g. how to seamlessly switch between local and remote storage of targets etc.
-
-- Orchestration and execution: Made intentionally no attempt at orchestration... Scheduler ran slow etc.
-- Minimalistic (for good and bad) a lot of boilerplate to get it "production ready".
+A lot has happened in the ecosystem since Luigi was created and it is not really under active development. In my opinion, where luigi falls short as an SDK is in its _lack of composability_ of Tasks; promoting tightly coupled DAGs and "parameter explosion" a classical case of ["Composition over inheritance"](#composability-ftw). The core luigi API is also rather minimalistic (for good and bad) and it requires quite some boilerplate to get it "production ready", e.g. how to seamlessly switch between local and remote storage of targets etc. Moreover, Luigi make intentionally no attempt at orchestration, in terms of how to provision compute resources, which again makes it simplistic, but more things to solve outside the framework.
 
 What `stardag` brings to the table:
 
@@ -124,9 +121,9 @@ Related issues:
 
 For context see [Composition over inheritance](https://en.wikipedia.org/wiki/Composition_over_inheritance).
 
-### How composability is achieved in stardag
+### How composability is achieved in `stardag`
 
-Rather straight forward: A task can take other tasks as parameters. The consuming/downstream task declares the _expectations_ on the input/upstream task by regular type hinting regarding what type of target the input/upstream task produces. Example:
+Rather straight forward: A task can take other tasks as parameters. The consuming/downstream task declares the _expectations_ on the input/upstream task by type hinting what type of target the input/upstream task is expected to produce. Example:
 
 ```python
 from stardag.build.sequential import build
