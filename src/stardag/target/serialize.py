@@ -4,7 +4,6 @@ import typing
 
 from pydantic import PydanticSchemaGenerationError, TypeAdapter
 
-from stardag.resources.resource_provider import resource_provider
 from stardag.target._base import (
     FileSystemTarget,
     FileSystemTargetHandle,
@@ -14,6 +13,7 @@ from stardag.target._base import (
     ReadableFileSystemTargetHandle,
     WritableFileSystemTargetHandle,
 )
+from stardag.utils.resource_provider import resource_provider
 
 try:
     from pandas import DataFrame as DataFrame  # type: ignore

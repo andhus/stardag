@@ -35,7 +35,9 @@ class TargetClassByPrefix(TargetClassFromURIProtocol):
 
 _DEFAULT_TARGET_ROOT_KEY = "default"
 _DEFAULT_TARGET_ROOTS = {
-    _DEFAULT_TARGET_ROOT_KEY: str(Path("./dcdag-target-roots/default").absolute()),
+    _DEFAULT_TARGET_ROOT_KEY: str(
+        Path("~/.stardag/target-roots/default").expanduser().absolute()
+    ),
 }
 
 

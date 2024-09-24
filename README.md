@@ -80,18 +80,17 @@ That said, the declarative DAG abstraction is _not_ suitable for all data proces
 
 ## Why not just use Luigi then?
 
-A lot has happened in the ecosystem since Luigi was created and it is not really under active development. In my opinion, where luigi falls short as an SDK is in its _lack of composability_ of Tasks; promoting tightly coupled DAGs and "parameter explosion" a classical case of ["Composition over inheritance"](#composability-ftw)
+A lot has happened in the ecosystem since Luigi was created and it is not really under active development. In my opinion, where luigi falls short as an SDK is in its _lack of composability_ of Tasks; promoting tightly coupled DAGs and "parameter explosion" a classical case of ["Composition over inheritance"](#composability-ftw). The core luigi API is also rather minimalistic (for good and bad) and it requires quite some boilerplate to get it "production ready", e.g. how to configure the .
 
-- As an SDK -> _Composability_! (Solved by allowing tasks as inputs(/parameters).
 - Orchestration and execution: Made intentionally no attempt at orchestration... Scheduler ran slow etc.
 - Minimalistic (for good and bad) a lot of boilerplate to get it "production ready".
 
-Adds:
+What `stardag` brings to the table:
 
-- Opinionated best practices out of the box (minimal boilerplate)
-- yet fully tweakable
-- modern complete type hints
-- execution framework agnostic
+- Composability: Task _instances_ as parameters
+- Opinionated best practices out of the box (minimal boilerplate) yet fully tweakable
+- Proper type hinting
+- Execution framework agnostic
 - (planned: asyncio tasks)
 - (planned: in memory caching)
 
@@ -123,7 +122,90 @@ Related issues:
 
 ## Composability FTW
 
-See [Composition over inheritance](https://en.wikipedia.org/wiki/Composition_over_inheritance)
+For context see [Composition over inheritance](https://en.wikipedia.org/wiki/Composition_over_inheritance).
+
+### How composability is achieved in stardag
+
+Rather straight forward: A task can take other tasks as parameters. The consuming/downstream task declares the _expectations_ on the input/upstream task by regular type hinting regarding what type of target the input/upstream task produces. Example:
+
+```python
+from stardag.build.sequential import build
+from stardag.decorator import task
+
+
+@task
+def add(a: float, b: float) -> float:
+    return a + b
+
+
+@task
+def multiply(a: float, b: float) -> float:
+    return a * b
+
+
+@task
+def subtract(a: float, b: float) -> float:
+    return a - b
+
+
+expression = add(
+    a=add(a=1, b=2),
+    b=subtract(
+        a=multiply(a=3, b=4),
+        b=5,
+    ),
+)
+
+build(expression)
+result = expression.output().load()
+print(result)
+# 10.0
+
+# Serialization:
+print(expression.model_dump_json(indent=2))
+# {
+#   "version": "0",
+#   "a": {
+#     "version": "0",
+#     "a": 1.0,
+#     "b": 2.0,
+#     "__family__": "add",
+#     "__namespace__": ""
+#   },
+#   "b": {
+#     "version": "0",
+#     "a": {
+#       "version": "0",
+#       "a": 3.0,
+#       "b": 4.0,
+#       "__family__": "multiply",
+#       "__namespace__": ""
+#     },
+#     "b": 5.0,
+#     "__family__": "subtract",
+#     "__namespace__": ""
+#   }
+# }
+
+# Parameter hashing
+print(expression._id_hash_jsonable())
+# {'namespace': '',
+#  'family': 'add',
+#  'parameters': {'version': '0',
+#   'a': '5133f0a7861a76ca3ea57e53036381006ca73153',
+#   'b': '251f1deeac5f21035fdaaffe95fd4e351ea8cd9b'}}
+print(expression.requires()["b"]._id_hash_jsonable())
+# {'namespace': '',
+#  'family': 'subtract',
+#  'parameters': {'version': '0',
+#   'a': 'fd9ef94177202229500d7816c88fad4044e49b74',
+#   'b': 5.0}}
+```
+
+To make this work, we need two things:
+
+- Support for polymorphism in serialization; we need to be able to serialize and deserialize any task.
+- "Recursive" hashing of parameters; naturally the hash producing the task id of the consuming task should include the task id of the input task
 
 ### Lack of Composability in Luigi
 
