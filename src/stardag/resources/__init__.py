@@ -1,7 +1,9 @@
-from stardag.resources.resource_provider import resource_provider
 from stardag.resources.target_factory import _DEFAULT_TARGET_ROOT_KEY, TargetFactory
 from stardag.target import FileSystemTarget
 from stardag.task import Task
+from stardag.utils.resource_provider import resource_provider
+
+__all__ = ["get_target", "target_factory_provider"]
 
 target_factory_provider = resource_provider(
     type_=TargetFactory, default_factory=TargetFactory

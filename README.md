@@ -122,7 +122,74 @@ Related issues:
 
 ## Composability FTW
 
-See [Composition over inheritance](https://en.wikipedia.org/wiki/Composition_over_inheritance)
+For context see [Composition over inheritance](https://en.wikipedia.org/wiki/Composition_over_inheritance).
+
+### How composability is achieved in stardag
+
+Rather straight forward: A task can take other tasks as parameters. The consuming/downstream task declares the _expectations_ on the input/upstream task by regular type hinting regarding what type of target the input/upstream task produces. Example:
+
+```python
+from stardag.build.sequential import build
+from stardag.decorator import task
+
+
+@task
+def add(a: float, b: float) -> float:
+    return a + b
+
+
+@task
+def multiply(a: float, b: float) -> float:
+    return a * b
+
+
+@task
+def subtract(a: float, b: float) -> float:
+    return a - b
+
+
+expression = add(
+    a=add(a=1, b=2),
+    b=subtract(
+        a=multiply(a=3, b=4),
+        b=5,
+    ),
+)
+
+print(repr(expression))
+# {
+#   "version": "0",
+#   "a": {
+#     "version": "0",
+#     "a": 1.0,
+#     "b": 2.0,
+#     "__family__": "add",
+#     "__namespace__": ""
+#   },
+#   "b": {
+#     "version": "0",
+#     "a": {
+#       "version": "0",
+#       "a": 3.0,
+#       "b": 4.0,
+#       "__family__": "multiply",
+#       "__namespace__": ""
+#     },
+#     "b": 5.0,
+#     "__family__": "subtract",
+#     "__namespace__": ""
+#   }
+# }
+build(expression)
+result = expression.output().load()
+print(result)
+# 10.0
+```
+
+To make this work, we need two things:
+
+- "Recursive" hashing of parameters; naturally the hash producing the task id of the consuming task should include the task id of the input task
+- Support for polymorphism in serialization; we need to be able to serialize and deserialize any task.
 
 ### Lack of Composability in Luigi
 
