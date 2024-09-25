@@ -3,7 +3,12 @@ from __future__ import annotations
 import abc
 from abc import abstractmethod
 from types import NoneType
-from typing import Annotated, Any, Callable, Generic, Self, Type, TypeVar
+from typing import Annotated, Any, Callable, Generic, Type, TypeVar
+
+try:
+    from typing import Self
+except ImportError:
+    from typing_extensions import Self
 
 from pydantic import BaseModel, ConfigDict, TypeAdapter
 from pydantic.config import JsonDict, JsonValue
