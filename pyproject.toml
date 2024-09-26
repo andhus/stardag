@@ -10,6 +10,9 @@ packages = [{ include = "stardag", from = "src" }]
 python = "^3.10"
 pydantic = "^2.8.2"
 
+pandas = { version = "^2.2.3", optional = true }
+scikit-learn = { version = "^1.5.2", optional = true }
+numpy = { version = "^2.1.1", optional = true }
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.2.2"
@@ -18,13 +21,8 @@ pytest-asyncio = "^0.23.7"
 ipdb = "^0.13.13"
 
 
-[tool.poetry.group.examples-ml-pipeline]
-optional = true
-
-[tool.poetry.group.examples-ml-pipeline.dependencies]
-pandas = "*"
-scikit-learn = "*"
-numpy = "*"
+[tool.poetry.extras]
+examples-ml-pipeline = ["pandas", "scikit-learn", "numpy"]
 
 
 [build-system]
@@ -36,9 +34,9 @@ build-backend = "poetry.core.masonry.api"
 profile = "black"
 
 
-[tool.pyright]
-venvPath = "."
-venv = ".venv"
+# [tool.pyright]
+# venvPath = "."
+# venv = ".venv"
 
 
 [tool.pytest]
