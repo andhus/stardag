@@ -12,13 +12,17 @@ on:
     types: [published, edited]
 
 jobs:
-  pre-commit:
+  lint:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      # Set environment variables to skip pyright hook (requires installed venv so
+      # run in tox environment)
+      - name: Set environment variable to skip
+        run: echo "SKIP=pyright" >> $GITHUB_ENV
       - uses: pre-commit/action@v3.0.1
 
   tests:
@@ -44,9 +48,6 @@ jobs:
         uses: actions/cache@v4
         with:
           path: .tox
-          # setup.py and setup.cfg have versioning info that would impact the
-          # tox environment. hashFiles only takes a single file path or pattern
-          # at the moment.
           key: ${{ runner.os }}-${{ matrix.python-version }}-tox-${{ hashFiles('pyproject.toml') }}
       - name: Test with tox
         run: tox
