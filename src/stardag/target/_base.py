@@ -1,4 +1,10 @@
 import typing
+
+try:
+    from typing import Self
+except ImportError:
+    from typing_extensions import Self
+
 from pathlib import Path
 from types import TracebackType
 
@@ -54,7 +60,7 @@ OpenMode = typing.Literal["r", "w", "rb", "wb"]
 @typing.runtime_checkable
 class FileSystemTargetHandle(typing.Protocol):
     def close(self) -> None: ...
-    def __enter__(self) -> typing.Self: ...
+    def __enter__(self) -> Self: ...
     def __exit__(
         self,
         type: type[BaseException] | None,

@@ -2,6 +2,11 @@ import abc
 import pickle
 import typing
 
+try:
+    from typing import Self
+except ImportError:
+    from typing_extensions import Self
+
 from pydantic import PydanticSchemaGenerationError, TypeAdapter
 
 from stardag.target._base import (
@@ -89,7 +94,7 @@ class Serializable(
 
 class PlainTextSerializer(Serializer[str]):
     @classmethod
-    def type_checked_init(cls, annotation: typing.Type[str]) -> typing.Self:
+    def type_checked_init(cls, annotation: typing.Type[str]) -> Self:
         if strip_annotation(annotation) != str:
             raise ValueError(f"{annotation} must be str.")
         return cls()
@@ -115,7 +120,7 @@ class PlainTextSerializer(Serializer[str]):
 
 class JSONSerializer(Serializer[LoadedT]):
     @classmethod
-    def type_checked_init(cls, annotation: typing.Type[LoadedT]) -> typing.Self:
+    def type_checked_init(cls, annotation: typing.Type[LoadedT]) -> Self:
         return cls(annotation)
 
     def __init__(self, annotation: typing.Type[LoadedT]) -> None:
@@ -149,7 +154,7 @@ class JSONSerializer(Serializer[LoadedT]):
 
 class PickleSerializer(Serializer[LoadedT]):
     @classmethod
-    def type_checked_init(cls, annotation: typing.Type[LoadedT]) -> typing.Self:
+    def type_checked_init(cls, annotation: typing.Type[LoadedT]) -> Self:
         # always ok
         return cls()
 
@@ -181,7 +186,7 @@ class PandasDataFrameCSVSerializer(Serializer[DataFrame]):
     """
 
     @classmethod
-    def type_checked_init(cls, annotation: typing.Type[DataFrame]) -> typing.Self:
+    def type_checked_init(cls, annotation: typing.Type[DataFrame]) -> Self:
         if strip_annotation(annotation) != DataFrame:
             raise ValueError(f"{annotation} must be DataFrame.")
         return cls()
@@ -209,14 +214,14 @@ class PandasDataFrameCSVSerializer(Serializer[DataFrame]):
 class SelfSerializing(typing.Protocol):
     def dump(self, target: FileSystemTarget) -> None: ...
     @classmethod
-    def load(cls, target: FileSystemTarget) -> typing.Self: ...
+    def load(cls, target: FileSystemTarget) -> Self: ...
 
 
 class SelfSerializer(Serializer[SelfSerializing]):
     """Serializer for objects that themselves implements the `Serializer` protocol."""
 
     @classmethod
-    def type_checked_init(cls, annotation: typing.Type[SelfSerializing]) -> typing.Self:
+    def type_checked_init(cls, annotation: typing.Type[SelfSerializing]) -> Self:
         return cls(strip_annotation(annotation))
 
     def __init__(self, class_) -> None:

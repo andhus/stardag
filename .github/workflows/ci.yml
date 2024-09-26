@@ -1,0 +1,57 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - "main"
+  pull_request:
+    branches:
+      - "**"
+  workflow_dispatch:
+  release:
+    types: [published, edited]
+
+jobs:
+  lint:
+    name: Lint (pre-commit)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      # Set environment variables to skip pyright hook (requires installed venv so
+      # run in tox environment)
+      - name: Set environment variable to skip
+        run: echo "SKIP=pyright" >> $GITHUB_ENV
+      - uses: pre-commit/action@v3.0.1
+
+  test-and-type-check:
+    name: Test and type check
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
+        os: [ubuntu-latest]
+
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install tox tox-gh-actions
+      - name: Install Poetry
+        uses: snok/install-poetry@v1
+      - name: Cache tox environments
+        id: cache-tox
+        uses: actions/cache@v4
+        with:
+          path: .tox
+          key: ${{ runner.os }}-${{ matrix.python-version }}-tox-${{ hashFiles('pyproject.toml') }}
+      - name: Test with tox
+        run: tox
