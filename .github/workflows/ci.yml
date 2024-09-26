@@ -13,6 +13,7 @@ on:
 
 jobs:
   lint:
+    name: Lint (pre-commit)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -25,7 +26,8 @@ jobs:
         run: echo "SKIP=pyright" >> $GITHUB_ENV
       - uses: pre-commit/action@v3.0.1
 
-  tests:
+  test-and-type-check:
+    name: Test and type check
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false

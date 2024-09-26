@@ -34,10 +34,5 @@ build-backend = "poetry.core.masonry.api"
 profile = "black"
 
 
-# [tool.pyright]
-# venvPath = "."
-# venv = ".venv"
-
-
 [tool.pytest]
 testpaths = ["tests"]
