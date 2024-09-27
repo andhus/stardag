@@ -402,3 +402,5 @@ def flatten_task_struct(task_struct: TaskStruct) -> list[Task]:
             for sub_task_struct in task_struct.values()
             for task in flatten_task_struct(sub_task_struct)
         ]
+
+    ValueError(f"Unsupported task struct type: {task_struct!r}")

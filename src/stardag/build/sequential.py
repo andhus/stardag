@@ -1,4 +1,4 @@
-from stardag.task import Task, TaskDeps
+from stardag.task import Task
 
 
 def build(task: Task, completion_cache: set[str] | None = None) -> None:
@@ -9,8 +9,7 @@ def _build(task: Task, completion_cache: set[str]) -> None:
     if _is_complete(task, completion_cache):
         return
 
-    deps = _flatten(task.requires())
-    for dep in deps:
+    for dep in task.deps():
         _build(dep, completion_cache)
 
     task.run()
@@ -24,17 +23,3 @@ def _is_complete(task: Task, completion_cache: set[str]) -> bool:
         completion_cache.add(task.task_id)
         return True
     return False
-
-
-def _flatten(requires_output: TaskDeps) -> list[Task]:
-    if requires_output is None:
-        return []
-    if isinstance(requires_output, Task):
-        return [requires_output]
-    if isinstance(requires_output, (list, tuple)):
-        return sum([_flatten(task) for task in requires_output], [])
-
-    if isinstance(requires_output, dict):
-        return sum([_flatten(task) for task in requires_output.values()], [])
-
-    raise ValueError(f"Unsupported requires_output type: {requires_output!r}")
