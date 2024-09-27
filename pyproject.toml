@@ -39,3 +39,6 @@ profile = "black"
 
 [tool.pytest]
 testpaths = ["tests"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"

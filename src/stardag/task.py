@@ -1,13 +1,15 @@
 import json
 import logging
 from abc import abstractmethod
-from functools import cached_property
+from collections import abc as collections_abc
+from functools import cached_property, total_ordering
 from hashlib import sha1
 from typing import (
     TYPE_CHECKING,
     Any,
     ClassVar,
     Dict,
+    Generator,
     Generic,
     Mapping,
     Sequence,
@@ -186,11 +188,16 @@ class TaskIDRef(BaseModel):
     version: str | None
     task_id: str
 
+    @property
+    def slug(self) -> str:
+        return f"{self.task_family}-{self.version or ''}-{self.task_id[:8]}"
+
 
 class _Generic(Generic[TargetT]):
     pass
 
 
+@total_ordering
 class Task(BaseModel, Generic[TargetT]):
     __version__: ClassVar[str | None] = None
 
@@ -205,6 +212,8 @@ class Task(BaseModel, Generic[TargetT]):
         _param_configs = {}
         __namespace__: ClassVar[str | None] = None
         __family__: ClassVar[str | None] = None
+
+    has_dynamic_deps: ClassVar[bool] = False
 
     @classmethod
     def __init_subclass__(
@@ -298,13 +307,20 @@ class Task(BaseModel, Generic[TargetT]):
         return None  # type: ignore
 
     @abstractmethod
-    def run(self) -> None:
+    def run(self) -> None | Generator["Task", None, None]:
         """Execute the task logic."""
         # TODO dynamic deps, including type hint
         ...
 
     def requires(self) -> TaskDeps:
         return None
+
+    def deps(self) -> list["Task"]:
+        """Get the dependencies of the task."""
+        requires = self.requires()
+        if requires is None:
+            return []
+        return flatten_task_struct(requires)
 
     @cached_property
     def task_id(self) -> str:
@@ -342,6 +358,9 @@ class Task(BaseModel, Generic[TargetT]):
         # TODO?
         return hash(self.task_id)
 
+    def __lt__(self, other: "Task") -> bool:
+        return self.task_id < other.task_id
+
 
 def _hash_safe_json_dumps(obj):
     """Fixed separators and (deep) sort_keys for stable hash."""
@@ -355,3 +374,28 @@ def _hash_safe_json_dumps(obj):
 def get_str_hash(str_: str) -> str:
     # TODO truncate / convert to UUID?
     return sha1(str_.encode("utf-8")).hexdigest()
+
+
+def flatten_task_struct(task_struct: TaskStruct) -> list[Task]:
+    """Flatten a TaskStruct into a list of Tasks.
+
+    TaskStruct: TypeAlias = Union[
+        "Task", Sequence["TaskStruct"], Mapping[str, "TaskStruct"]
+    ]
+    """
+    if isinstance(task_struct, Task):
+        return [task_struct]
+
+    if isinstance(task_struct, collections_abc.Sequence):
+        return [
+            task
+            for sub_task_struct in task_struct
+            for task in flatten_task_struct(sub_task_struct)
+        ]
+
+    if isinstance(task_struct, collections_abc.Mapping):
+        return [
+            task
+            for sub_task_struct in task_struct.values()
+            for task in flatten_task_struct(sub_task_struct)
+        ]
