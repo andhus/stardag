@@ -1,5 +1,3 @@
-from typing import ClassVar
-
 from stardag.auto_task import AutoFSTTask
 from stardag.task import auto_namespace
 from stardag.task_parameter import TaskLoads
@@ -11,8 +9,6 @@ class DynamicDepsTask(AutoFSTTask[str]):
     value: str
     static_deps: tuple[TaskLoads[str], ...] = ()
     dynamic_deps: tuple[TaskLoads[str], ...] = ()
-
-    has_dynamic_deps: ClassVar[bool] = True
 
     def requires(self):  # type: ignore
         return self.static_deps

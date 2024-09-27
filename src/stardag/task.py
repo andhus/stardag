@@ -1,3 +1,4 @@
+import inspect
 import json
 import logging
 from abc import abstractmethod
@@ -213,8 +214,6 @@ class Task(BaseModel, Generic[TargetT]):
         __namespace__: ClassVar[str | None] = None
         __family__: ClassVar[str | None] = None
 
-    has_dynamic_deps: ClassVar[bool] = False
-
     @classmethod
     def __init_subclass__(
         cls,
@@ -321,6 +320,10 @@ class Task(BaseModel, Generic[TargetT]):
         if requires is None:
             return []
         return flatten_task_struct(requires)
+
+    @classmethod
+    def has_dynamic_deps(cls) -> bool:
+        return inspect.isgeneratorfunction(cls.run)
 
     @cached_property
     def task_id(self) -> str:

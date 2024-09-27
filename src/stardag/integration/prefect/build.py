@@ -136,7 +136,7 @@ async def build_dag_recursive(
         # Task with dynamic deps upstream
         return None
 
-    if getattr(task, "has_dynamic_deps", False):
+    if task.has_dynamic_deps():
 
         @prefect_task(name=f"{task.id_ref.slug}-dynamic")
         async def stardag_dynamic_task():
