@@ -45,7 +45,7 @@ TaskStruct: TypeAlias = Union[
 # purposes and dev UX - it allows for grouping and labeling of the incoming "edges"
 # in the DAG.
 TaskDeps: TypeAlias = Union[
-    None, "Task", Sequence["Task"], Mapping[str, "Task"], Mapping[str, Sequence["Task"]]
+    "Task", Sequence["Task"], Mapping[str, "Task"], Mapping[str, Sequence["Task"]]
 ]
 
 
@@ -306,12 +306,12 @@ class Task(BaseModel, Generic[TargetT]):
         return None  # type: ignore
 
     @abstractmethod
-    def run(self) -> None | Generator["Task", None, None]:
+    def run(self) -> None | Generator[TaskDeps, None, None]:
         """Execute the task logic."""
         # TODO dynamic deps, including type hint
         ...
 
-    def requires(self) -> TaskDeps:
+    def requires(self) -> TaskDeps | None:
         return None
 
     def deps(self) -> list["Task"]:

@@ -48,4 +48,4 @@ def assert_dynamic_deps_task_complete_recursive(
 ):
     assert task.complete() == is_complete
     for dep in task.static_deps + task.dynamic_deps:
-        assert_dynamic_deps_task_complete_recursive(dep, is_complete)
+        assert_dynamic_deps_task_complete_recursive(dep, is_complete)  # type: ignore

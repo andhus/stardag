@@ -7,7 +7,7 @@ from prefect.artifacts import create_markdown_artifact
 from prefect.futures import PrefectConcurrentFuture
 
 from stardag.integration.prefect.utils import format_key
-from stardag.task import Task, flatten_task_struct
+from stardag.task import Task, TaskDeps, flatten_task_struct
 
 logger = logging.getLogger(__name__)
 
@@ -144,12 +144,17 @@ async def build_dag_recursive(
             if not task.complete():
                 try:
                     gen = task.run()
-                    deps = flatten_task_struct(next(gen))
+                    assert hasattr(gen, "__next__")
+                    gen = typing.cast(typing.Generator[TaskDeps, None, None], gen)
+
+                    requires = next(gen)
+                    deps = flatten_task_struct(requires)
                     completed = [dep.complete() for dep in deps]
                     logger.debug(f"Initial deps: {deps}, completed: {completed}")
                     while all(completed):
                         logger.debug("All deps complete")
-                        deps = flatten_task_struct(next(gen))  # TODO send output?
+                        requires = next(gen)
+                        deps = flatten_task_struct(requires)
                         completed = [dep.complete() for dep in deps]
                         logger.debug(f"Deps: {deps}, completed: {completed}")
 
@@ -160,7 +165,7 @@ async def build_dag_recursive(
                     return task.task_id, None
 
         extra_deps = [prev_dynamic_future] if prev_dynamic_future is not None else []
-        future = stardag_dynamic_task.submit(
+        future = stardag_dynamic_task.submit(  # type: ignore
             wait_for=upstream_build_results + extra_deps
         )
         task_id_to_dynamic_future[task.task_id] = future
@@ -180,16 +185,17 @@ async def build_dag_recursive(
             res = task.run()
             # check if it's a generator
             if hasattr(res, "__next__"):
-                raise ValueError("Generators not supported")
-            if hasattr(task, "prefect_on_complete_artifacts"):
-                for artifact in task.prefect_on_complete_artifacts():
-                    await artifact.create()
+                raise AssertionError(
+                    "Tasks with dynamic deps should be executed separately."
+                )
+            # TODO remove, should be handled by `on_complete_callback`
+            # if hasattr(task, "prefect_on_complete_artifacts"):
+            #     for artifact in task.prefect_on_complete_artifacts():
+            #         await artifact.create()
 
         return task.task_id
 
-    future = stardag_task.submit(
-        wait_for=upstream_build_results,
-    )
+    future = stardag_task.submit(wait_for=upstream_build_results)  # type: ignore
     task_id_to_future[task.task_id] = future
 
     return future
@@ -213,7 +219,7 @@ async def create_markdown(task: Task):
 ```
 """
 
-    return await create_markdown_artifact(
+    return await create_markdown_artifact(  # type: ignore
         key=format_key(f"{task.task_id}-spec"),
         description=f"Task spec for {task.task_id}",
         markdown=markdown,
