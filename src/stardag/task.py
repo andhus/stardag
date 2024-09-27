@@ -18,7 +18,7 @@ from typing import (
 
 from pydantic import BaseModel, Field
 from pydantic.fields import FieldInfo
-from typing_extensions import List, TypeAlias, Union
+from typing_extensions import TypeAlias, Union
 
 from stardag.parameter import (
     IDHasher,
@@ -33,7 +33,9 @@ logger = logging.getLogger(__name__)
 
 TargetT = TypeVar("TargetT", bound=Union[Target, None], covariant=True)
 
-TaskStruct: TypeAlias = Union["Task", List["TaskStruct"], Dict[str, "TaskStruct"]]
+TaskStruct: TypeAlias = Union[
+    "Task", Sequence["TaskStruct"], Mapping[str, "TaskStruct"]
+]
 
 # The type allowed for tasks to declare their dependencies. Note that it would be
 # enough with just list[Task], but allowing these types are only for visualization
