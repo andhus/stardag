@@ -191,7 +191,8 @@ class TaskIDRef(BaseModel):
 
     @property
     def slug(self) -> str:
-        return f"{self.task_family}-{self.version or ''}-{self.task_id[:8]}"
+        version_slug = f"v{self.version}" if self.version else ""
+        return f"{self.task_family}-{version_slug}-{self.task_id[:8]}"
 
 
 class _Generic(Generic[TargetT]):

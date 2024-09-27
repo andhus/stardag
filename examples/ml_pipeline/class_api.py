@@ -160,28 +160,29 @@ class Metrics(ExamplesMLPipelineBase[dict[str, float]]):
         metrics = get_metrics(dataset, predictions)
         self.output().save(metrics)
 
+    def prefect_on_complete_artifacts(self):
+        from prefect.artifacts import MarkdownArtifact
 
-#     def prefect_on_complete_artifacts(self):
-#         from prefect.artifacts import MarkdownArtifact
+        from stardag.integration.prefect.utils import format_key
 
-#         metrics = self.load()
-#         markdown = f"""# Metrics Summary
+        metrics = self.output().load()
+        markdown = f"""# Metrics Summary
 
-# | Metric    | Value |
-# |-----------|-------|
-# | Accuracy  | {metrics['accuracy']} |
-# | Precision | {metrics['precision']} |
-# | Recall    | {metrics['recall']} |
-# | F1        | {metrics['f1']} |
-# """
+| Metric    | Value |
+|-----------|-------|
+| Accuracy  | {metrics['accuracy']} |
+| Precision | {metrics['precision']} |
+| Recall    | {metrics['recall']} |
+| F1        | {metrics['f1']} |
+"""
 
-#         return [
-#             MarkdownArtifact(
-#                 markdown=markdown,
-#                 key=format_key(f"{self.task_id}-result"),
-#                 description="Metrics",
-#             )
-#         ]
+        return [
+            MarkdownArtifact(  # type: ignore
+                markdown=markdown,
+                key=format_key(f"{self.id_ref.slug}-result"),
+                description="Metrics",
+            )
+        ]
 
 
 class Benchmark(ExamplesMLPipelineBase[list[dict[str, Any]]]):
@@ -213,18 +214,20 @@ class Benchmark(ExamplesMLPipelineBase[list[dict[str, Any]]]):
         ]
         self.output().save(metrics_and_params_s)
 
-    # def prefect_on_complete_artifacts(self):
-    #     from prefect.artifacts import TableArtifact
+    def prefect_on_complete_artifacts(self):
+        from prefect.artifacts import TableArtifact
 
-    #     rows = self.output().load()
+        from stardag.integration.prefect.utils import format_key
 
-    #     return [
-    #         TableArtifact(
-    #             table=rows,
-    #             key=format_key(f"{self.task_id}-result"),
-    #             description="Metrics by model parameters",
-    #         )
-    #     ]
+        rows = self.output().load()
+
+        return [
+            TableArtifact(  # type: ignore
+                table=rows,
+                key=format_key(f"{self.id_ref.slug}-result"),
+                description="Metrics by model parameters",
+            )
+        ]
 
 
 def get_metrics_dag(
@@ -317,4 +320,6 @@ def build_metrics_dag():
     print(metrics.model_dump_json(indent=2))
     build_sequential(metrics)
     print(json.dumps(metrics.output().load(), indent=2))
+    return metrics
+    return metrics
     return metrics

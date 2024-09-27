@@ -19,6 +19,7 @@ async def build(
     task: Task,
     before_run_callback: Callback | None = None,
     after_run_callback: Callback | None = None,
+    wait_for_completion: bool = True,
 ) -> dict[str, PrefectConcurrentFuture]:
     task_id_to_future = {}
     task_id_to_dynamic_future = {}
@@ -66,6 +67,9 @@ async def build(
             task_id_to_dynamic_deps=task_id_to_dynamic_deps,
             visited=set([]),
         )
+    if wait_for_completion:
+        for future in task_id_to_future.values():
+            future.wait()
 
     return task_id_to_future
 
@@ -143,7 +147,7 @@ async def build_dag_recursive(
             # TODO: concurrency lock
             if not task.complete():
                 try:
-                    gen = task.run()
+                    gen = await run(task)
                     assert hasattr(gen, "__next__")
                     gen = typing.cast(typing.Generator[TaskDeps, None, None], gen)
 
@@ -181,8 +185,7 @@ async def build_dag_recursive(
     async def stardag_task():
         # TODO: concurrency lock
         if not task.complete():
-            await create_markdown(task)
-            res = task.run()
+            res = await run(task)
             # check if it's a generator
             if hasattr(res, "__next__"):
                 raise AssertionError(
@@ -210,7 +213,8 @@ async def _completed_prefect_future(
 
 async def create_markdown(task: Task):
     output_path = getattr(task.output(), "path", None)
-    markdown = f"""# {task.task_id}
+    markdown = f"""# {task.id_ref.slug}
+**Task id**: `{task.task_id}`
 **Task class**: `{task.__module__}.{task.__class__.__name__}`
 **Output path**: [{output_path}]({output_path})
 **Task spec**
@@ -220,7 +224,7 @@ async def create_markdown(task: Task):
 """
 
     return await create_markdown_artifact(  # type: ignore
-        key=format_key(f"{task.task_id}-spec"),
+        key=format_key(f"{task.id_ref.slug}-spec"),
         description=f"Task spec for {task.task_id}",
         markdown=markdown,
     )
