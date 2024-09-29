@@ -70,6 +70,16 @@ print(res)
 # 45
 ```
 
+If you want to try something more realistic, make sure you have access to a prefect server (see [examples/ml_pipeline/README.md](./examples/ml_pipeline/README.md)) and run
+
+```shell
+poetry install --extras prefect --extras examples-ml-pipeline
+poetry run python -m examples.ml_pipeline.prefect_build
+```
+
+to watch you ML-DAG materialize
+<img width="1181" alt="image" src="https://github.com/user-attachments/assets/372c40c4-ca14-49b3-bbf6-18b758ddce5f">
+
 See the [`USER_GUIDE.md`](./USER_GUIDE.md) for further details.
 
 ## Why yet another Python DAG-framework?

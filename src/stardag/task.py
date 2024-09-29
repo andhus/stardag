@@ -1,13 +1,16 @@
+import inspect
 import json
 import logging
 from abc import abstractmethod
-from functools import cached_property
+from collections import abc as collections_abc
+from functools import cached_property, total_ordering
 from hashlib import sha1
 from typing import (
     TYPE_CHECKING,
     Any,
     ClassVar,
     Dict,
+    Generator,
     Generic,
     Mapping,
     Sequence,
@@ -18,7 +21,7 @@ from typing import (
 
 from pydantic import BaseModel, Field
 from pydantic.fields import FieldInfo
-from typing_extensions import List, TypeAlias, Union
+from typing_extensions import TypeAlias, Union
 
 from stardag.parameter import (
     IDHasher,
@@ -33,14 +36,16 @@ logger = logging.getLogger(__name__)
 
 TargetT = TypeVar("TargetT", bound=Union[Target, None], covariant=True)
 
-TaskStruct: TypeAlias = Union["Task", List["TaskStruct"], Dict[str, "TaskStruct"]]
+TaskStruct: TypeAlias = Union[
+    "Task", Sequence["TaskStruct"], Mapping[str, "TaskStruct"]
+]
 
 # The type allowed for tasks to declare their dependencies. Note that it would be
 # enough with just list[Task], but allowing these types are only for visualization
 # purposes and dev UX - it allows for grouping and labeling of the incoming "edges"
 # in the DAG.
 TaskDeps: TypeAlias = Union[
-    None, "Task", Sequence["Task"], Mapping[str, "Task"], Mapping[str, Sequence["Task"]]
+    "Task", Sequence["Task"], Mapping[str, "Task"], Mapping[str, Sequence["Task"]]
 ]
 
 
@@ -184,11 +189,17 @@ class TaskIDRef(BaseModel):
     version: str | None
     task_id: str
 
+    @property
+    def slug(self) -> str:
+        version_slug = f"v{self.version}" if self.version else ""
+        return f"{self.task_family}-{version_slug}-{self.task_id[:8]}"
+
 
 class _Generic(Generic[TargetT]):
     pass
 
 
+@total_ordering
 class Task(BaseModel, Generic[TargetT]):
     __version__: ClassVar[str | None] = None
 
@@ -296,13 +307,24 @@ class Task(BaseModel, Generic[TargetT]):
         return None  # type: ignore
 
     @abstractmethod
-    def run(self) -> None:
+    def run(self) -> None | Generator[TaskDeps, None, None]:
         """Execute the task logic."""
         # TODO dynamic deps, including type hint
         ...
 
-    def requires(self) -> TaskDeps:
+    def requires(self) -> TaskDeps | None:
         return None
+
+    def deps(self) -> list["Task"]:
+        """Get the dependencies of the task."""
+        requires = self.requires()
+        if requires is None:
+            return []
+        return flatten_task_struct(requires)
+
+    @classmethod
+    def has_dynamic_deps(cls) -> bool:
+        return inspect.isgeneratorfunction(cls.run)
 
     @cached_property
     def task_id(self) -> str:
@@ -340,6 +362,9 @@ class Task(BaseModel, Generic[TargetT]):
         # TODO?
         return hash(self.task_id)
 
+    def __lt__(self, other: "Task") -> bool:
+        return self.task_id < other.task_id
+
 
 def _hash_safe_json_dumps(obj):
     """Fixed separators and (deep) sort_keys for stable hash."""
@@ -353,3 +378,30 @@ def _hash_safe_json_dumps(obj):
 def get_str_hash(str_: str) -> str:
     # TODO truncate / convert to UUID?
     return sha1(str_.encode("utf-8")).hexdigest()
+
+
+def flatten_task_struct(task_struct: TaskStruct) -> list[Task]:
+    """Flatten a TaskStruct into a list of Tasks.
+
+    TaskStruct: TypeAlias = Union[
+        "Task", Sequence["TaskStruct"], Mapping[str, "TaskStruct"]
+    ]
+    """
+    if isinstance(task_struct, Task):
+        return [task_struct]
+
+    if isinstance(task_struct, collections_abc.Sequence):
+        return [
+            task
+            for sub_task_struct in task_struct
+            for task in flatten_task_struct(sub_task_struct)
+        ]
+
+    if isinstance(task_struct, collections_abc.Mapping):
+        return [
+            task
+            for sub_task_struct in task_struct.values()
+            for task in flatten_task_struct(sub_task_struct)
+        ]
+
+    ValueError(f"Unsupported task struct type: {task_struct!r}")

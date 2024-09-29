@@ -3,6 +3,7 @@ import typing
 import pytest
 
 from stardag.auto_task import AutoFSTTask
+from stardag.decorator import task as task_decorator
 from stardag.parameter import (
     IDHasher,
     IDHashExclude,
@@ -10,7 +11,13 @@ from stardag.parameter import (
     _ParameterConfig,
     always_include,
 )
-from stardag.task import _REGISTER, Task, get_namespace_family
+from stardag.task import (
+    _REGISTER,
+    Task,
+    TaskStruct,
+    flatten_task_struct,
+    get_namespace_family,
+)
 from stardag.utils.testing.namepace import (
     ClearNamespaceByArg,
     ClearNamespaceByDunder,
@@ -91,3 +98,37 @@ def test_auto_namespace(task_class: typing.Type[Task], expected_namespace_family
     family = task_class.get_family()
     assert get_namespace_family(namespace, family) == expected_namespace_family
     assert _REGISTER.get(namespace, family) == task_class
+
+
+@task_decorator
+def mock_task(key: str) -> str:
+    return key
+
+
+@pytest.mark.parametrize(
+    "task_struct, expected",
+    [
+        (
+            mock_task(key="a"),
+            [mock_task(key="a")],
+        ),
+        (
+            [mock_task(key="a"), mock_task(key="b")],
+            [mock_task(key="a"), mock_task(key="b")],
+        ),
+        (
+            {"a": mock_task(key="a"), "b": mock_task(key="b")},
+            [mock_task(key="a"), mock_task(key="b")],
+        ),
+        (
+            {"a": mock_task(key="a"), "b": [mock_task(key="b"), mock_task(key="c")]},
+            [mock_task(key="a"), mock_task(key="b"), mock_task(key="c")],
+        ),
+        (
+            [mock_task(key="a"), {"b": mock_task(key="b"), "c": mock_task(key="c")}],
+            [mock_task(key="a"), mock_task(key="b"), mock_task(key="c")],
+        ),
+    ],
+)
+def test_flatten_task_struct(task_struct: TaskStruct, expected: list[Task]):
+    assert flatten_task_struct(task_struct) == expected

@@ -1,4 +1,5 @@
 import datetime
+import json
 import logging
 import pickle
 import tempfile
@@ -258,5 +259,9 @@ def run():
     predictions = predict_model(trained_model, df)
 
     metrics = get_metrics(df, predictions)  # type: ignore
-    print(metrics)
+    print(json.dumps(metrics, indent=2))
     return metrics
+
+
+if __name__ == "__main__":
+    metrics = run()

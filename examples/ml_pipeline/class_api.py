@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 import datetime
 import json
 import logging
@@ -16,22 +15,7 @@ from stardag.target import LoadedT
 from stardag.task import namespace
 from stardag.task_parameter import TaskLoads
 
-from .base import (
-    DatasetFilter,
-    DecisionTreeHyperParameters,
-    HyperParameters,
-    LogisticRegressionHyperParameters,
-    ModelFitContext,
-    ProcessParams,
-    RandomPartition,
-    SKLearnClassifierModel,
-    generate_data,
-    get_metrics,
-    predict_model,
-    process_data,
-    train_model,
-    utc_today,
-)
+from . import base
 
 logger = logging.getLogger(__name__)
 
@@ -45,7 +29,7 @@ class ExamplesMLPipelineBase(AutoFSTTask[LoadedT], typing.Generic[LoadedT]):
 
 
 class Dump(ExamplesMLPipelineBase[pd.DataFrame]):
-    date: datetime.date = Field(default_factory=utc_today)
+    date: datetime.date = Field(default_factory=base.utc_today)
     snapshot_slug: str = Field(
         default="default",
         description=(
@@ -62,16 +46,16 @@ class Dump(ExamplesMLPipelineBase[pd.DataFrame]):
         )
 
     def run(self):
-        if not self.date == utc_today():
+        if not self.date == base.utc_today():
             raise ValueError("Date must be today")
 
-        data = generate_data()
+        data = base.generate_data()
         self.output().save(data)
 
 
 class Dataset(ExamplesMLPipelineBase[pd.DataFrame]):
     dump: TaskLoads[pd.DataFrame] = Field(default_factory=Dump)
-    params: ProcessParams = ProcessParams()
+    params: base.ProcessParams = base.ProcessParams()
 
     def requires(self):
         return self.dump
@@ -79,13 +63,13 @@ class Dataset(ExamplesMLPipelineBase[pd.DataFrame]):
     def run(self):
         print("Processing data...")
         data = self.dump.output().load()
-        processed_data = process_data(data, params=self.params)
+        processed_data = base.process_data(data, params=self.params)
         self.output().save(processed_data)
 
 
 class Subset(ExamplesMLPipelineBase[pd.DataFrame]):
     dataset: TaskLoads[pd.DataFrame]
-    filter: DatasetFilter
+    filter: base.DatasetFilter
 
     def requires(self):  # type: ignore
         return self.dataset
@@ -97,8 +81,8 @@ class Subset(ExamplesMLPipelineBase[pd.DataFrame]):
         self.output().save(subset)
 
 
-class TrainedModel(ExamplesMLPipelineBase[SKLearnClassifierModel]):
-    model: HyperParameters = LogisticRegressionHyperParameters()
+class TrainedModel(ExamplesMLPipelineBase[base.SKLearnClassifierModel]):
+    model: base.HyperParameters = base.LogisticRegressionHyperParameters()
     dataset: Subset
     seed: int = 0
 
@@ -114,11 +98,11 @@ class TrainedModel(ExamplesMLPipelineBase[SKLearnClassifierModel]):
         with tempfile.TemporaryDirectory() as tmpdir:
             tmp_path = Path(tmpdir)
             model_dir = tmp_path / "model_dir"
-            model = SKLearnClassifierModel(hyper_parameters=self.model)
-            model = train_model(
+            model = base.SKLearnClassifierModel(hyper_parameters=self.model)
+            model = base.train_model(
                 model=model,
                 dataset=dataset,
-                context=ModelFitContext(
+                context=base.ModelFitContext(
                     model_dir=model_dir,
                     seed=self.seed,
                 ),
@@ -140,7 +124,7 @@ class Predictions(ExamplesMLPipelineBase[pd.DataFrame]):
         print("Predicting...")
         model = self.trained_model.output().load()
         dataset = self.dataset.output().load()
-        predictions = predict_model(model=model, dataset=dataset)
+        predictions = base.predict_model(model=model, dataset=dataset)
         self.output().save(predictions)
 
 
@@ -157,37 +141,38 @@ class Metrics(ExamplesMLPipelineBase[dict[str, float]]):
         print("Calculating metrics...")
         dataset = self.predictions.dataset.output().load()
         predictions = self.predictions.output().load()
-        metrics = get_metrics(dataset, predictions)
+        metrics = base.get_metrics(dataset, predictions)
         self.output().save(metrics)
 
+    def prefect_on_complete_artifacts(self):
+        from prefect.artifacts import MarkdownArtifact
 
-#     def prefect_on_complete_artifacts(self):
-#         from prefect.artifacts import MarkdownArtifact
+        from stardag.integration.prefect.utils import format_key
 
-#         metrics = self.load()
-#         markdown = f"""# Metrics Summary
+        metrics = self.output().load()
+        markdown = f"""# Metrics Summary
 
-# | Metric    | Value |
-# |-----------|-------|
-# | Accuracy  | {metrics['accuracy']} |
-# | Precision | {metrics['precision']} |
-# | Recall    | {metrics['recall']} |
-# | F1        | {metrics['f1']} |
-# """
+| Metric    | Value |
+|-----------|-------|
+| Accuracy  | {metrics['accuracy']} |
+| Precision | {metrics['precision']} |
+| Recall    | {metrics['recall']} |
+| F1        | {metrics['f1']} |
+"""
 
-#         return [
-#             MarkdownArtifact(
-#                 markdown=markdown,
-#                 key=format_key(f"{self.task_id}-result"),
-#                 description="Metrics",
-#             )
-#         ]
+        return [
+            MarkdownArtifact(  # type: ignore
+                markdown=markdown,
+                key=format_key(f"{self.id_ref.slug}-result"),
+                description="Metrics",
+            )
+        ]
 
 
 class Benchmark(ExamplesMLPipelineBase[list[dict[str, Any]]]):
     train_dataset: Subset
     test_dataset: Subset
-    models: frozenset[HyperParameters]
+    models: frozenset[base.HyperParameters]
     seed: int = 0
 
     def requires(self):  # type: ignore
@@ -213,23 +198,25 @@ class Benchmark(ExamplesMLPipelineBase[list[dict[str, Any]]]):
         ]
         self.output().save(metrics_and_params_s)
 
-    # def prefect_on_complete_artifacts(self):
-    #     from prefect.artifacts import TableArtifact
+    def prefect_on_complete_artifacts(self):
+        from prefect.artifacts import TableArtifact
 
-    #     rows = self.output().load()
+        from stardag.integration.prefect.utils import format_key
 
-    #     return [
-    #         TableArtifact(
-    #             table=rows,
-    #             key=format_key(f"{self.task_id}-result"),
-    #             description="Metrics by model parameters",
-    #         )
-    #     ]
+        rows = self.output().load()
+
+        return [
+            TableArtifact(  # type: ignore
+                table=rows,
+                key=format_key(f"{self.id_ref.slug}-result"),
+                description="Metrics by model parameters",
+            )
+        ]
 
 
 def get_metrics_dag(
     dump: Dump | None = None,
-    preprocess_params: ProcessParams = ProcessParams(),
+    preprocess_params: base.ProcessParams = base.ProcessParams(),
 ):
     dump = dump or Dump()
 
@@ -237,8 +224,8 @@ def get_metrics_dag(
 
     train_dataset = Subset(
         dataset=dataset,
-        filter=DatasetFilter(
-            random_partition=RandomPartition(
+        filter=base.DatasetFilter(
+            random_partition=base.RandomPartition(
                 num_buckets=3,
                 include_buckets=(0, 1),
             )
@@ -246,8 +233,8 @@ def get_metrics_dag(
     )
     test_dataset = Subset(
         dataset=dataset,
-        filter=DatasetFilter(
-            random_partition=RandomPartition(
+        filter=base.DatasetFilter(
+            random_partition=base.RandomPartition(
                 num_buckets=3,
                 include_buckets=(2,),
             )
@@ -255,7 +242,7 @@ def get_metrics_dag(
     )
 
     trained_model = TrainedModel(
-        model=LogisticRegressionHyperParameters(),
+        model=base.LogisticRegressionHyperParameters(),
         dataset=train_dataset,
         seed=0,
     )
@@ -269,7 +256,7 @@ def get_metrics_dag(
 
 def get_benchmark_dag(
     dump: Dump | None = None,
-    preprocess_params: ProcessParams = ProcessParams(),
+    preprocess_params: base.ProcessParams = base.ProcessParams(),
 ):
     dump = dump or Dump()
 
@@ -277,8 +264,8 @@ def get_benchmark_dag(
 
     train_dataset = Subset(
         dataset=dataset,
-        filter=DatasetFilter(
-            random_partition=RandomPartition(
+        filter=base.DatasetFilter(
+            random_partition=base.RandomPartition(
                 num_buckets=3,
                 include_buckets=(0, 1),
             )
@@ -286,8 +273,8 @@ def get_benchmark_dag(
     )
     test_dataset = Subset(
         dataset=dataset,
-        filter=DatasetFilter(
-            random_partition=RandomPartition(
+        filter=base.DatasetFilter(
+            random_partition=base.RandomPartition(
                 num_buckets=3,
                 include_buckets=(2,),
             )
@@ -299,11 +286,11 @@ def get_benchmark_dag(
         test_dataset=test_dataset,
         models=frozenset(
             [
-                LogisticRegressionHyperParameters(penalty="l2"),
-                DecisionTreeHyperParameters(criterion="gini", max_depth=3),
-                DecisionTreeHyperParameters(criterion="gini", max_depth=10),
-                DecisionTreeHyperParameters(criterion="entropy", max_depth=3),
-                DecisionTreeHyperParameters(criterion="entropy", max_depth=10),
+                base.LogisticRegressionHyperParameters(penalty="l2"),
+                base.DecisionTreeHyperParameters(criterion="gini", max_depth=3),
+                base.DecisionTreeHyperParameters(criterion="gini", max_depth=10),
+                base.DecisionTreeHyperParameters(criterion="entropy", max_depth=3),
+                base.DecisionTreeHyperParameters(criterion="entropy", max_depth=10),
             ]
         ),
         seed=0,
@@ -312,9 +299,8 @@ def get_benchmark_dag(
     return benchmark
 
 
-def build_metrics_dag():
+if __name__ == "__main__":
     metrics = get_metrics_dag()
     print(metrics.model_dump_json(indent=2))
     build_sequential(metrics)
     print(json.dumps(metrics.output().load(), indent=2))
-    return metrics
