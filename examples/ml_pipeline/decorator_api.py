@@ -148,9 +148,8 @@ def get_metrics_dag():
     )
 
 
-def build_metrics_dag():
-    metrics = get_metrics_dag()
-    print(metrics.model_dump_json(indent=2))
-    build_sequential(metrics)
-    print(json.dumps(metrics.output().load(), indent=2))
-    return metrics
+if __name__ == "__main__":
+    metrics_task = get_metrics_dag()
+    print(metrics_task.model_dump_json(indent=2))
+    build_sequential(metrics_task)
+    print(json.dumps(metrics_task.output().load(), indent=2))

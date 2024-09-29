@@ -315,11 +315,8 @@ def get_benchmark_dag(
     return benchmark
 
 
-def build_metrics_dag():
+if __name__ == "__main__":
     metrics = get_metrics_dag()
     print(metrics.model_dump_json(indent=2))
     build_sequential(metrics)
     print(json.dumps(metrics.output().load(), indent=2))
-    return metrics
-    return metrics
-    return metrics

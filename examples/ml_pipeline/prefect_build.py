@@ -1,10 +1,11 @@
 import asyncio
 
-from ml_pipeline.class_api import get_metrics_dag
 from prefect import flow
 
 from stardag.integration.prefect.build import build as prefect_build
 from stardag.integration.prefect.build import create_markdown
+
+from .class_api import get_metrics_dag
 
 
 async def custom_callback(task):
