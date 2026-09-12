@@ -121,6 +121,27 @@ that, and nothing else does.
   result, and the build's `fail_mode` decides.
 - **Authority to revoke is build-scoped.** Cancelling build B releases
   only the claims B's own executions hold, never build C's.
+- **A dependency edge stops counting when the act that asserted it is
+  withdrawn.** A static edge is declared by every build that registers the
+  task. A dynamic edge is discovered — one execution attempt yielded it and
+  suspended — so abandoning that attempt abandons the edges with it: a task
+  reset to `PENDING`, or a suspension taken over by another build, retracts
+  the generation the previous attempt yielded. Without that, an attempt
+  abandoned part-way left its incomplete children gating their own parent
+  forever, and the next build had to re-run a whole generation of work the
+  task was no longer going to ask for.
+
+!!! warning "A fan-out's scheme belongs in its children's identity"
+
+    Changing how a task partitions its work internally does not change what
+    it promises, so its own id should not change. But the children it
+    yields **must** be distinguishable: if a partition task's parameters are
+    just `index=3`, then partition 3 of a ten-way split and partition 3 of a
+    fifty-way split share an id while promising different content, and
+    stardag will reuse the stale target. Put whatever the scheme is — the
+    partition count, the chunk boundaries — into the children's parameters.
+    Nothing can detect this for you; it is the content-addressing contract
+    applied one level down.
 
 Control it with `build(..., claim=...)`: `None` (default) claims probeable
 executions; `True` always claims; `False` disables. Without a registry

@@ -2004,7 +2004,13 @@ async def skip_blocked_tasks(
         select(TaskDependency.downstream_task_id.label("id"))
         .join(seeds, TaskDependency.upstream_task_id == seeds.c.id)
         .join(Task, Task.id == seeds.c.id)
-        .where(Task.latest_status.in_(_propagating_statuses))
+        .where(
+            Task.latest_status.in_(_propagating_statuses),
+            # A failure does not propagate down a retracted edge: the
+            # attempt that yielded it has been abandoned, so the downstream
+            # task is not waiting on it any more.
+            TaskDependency.superseded_at.is_(None),
+        )
     )
     closure = seeds.union(downstream)
 
@@ -2124,6 +2130,12 @@ async def get_build_frontier(
         .where(
             TaskDependency.downstream_task_id == Task.id,
             upstream.latest_status != TaskStatus.COMPLETED,
+            # Only current edges gate. A retracted one belonged to an
+            # execution attempt that was abandoned (see
+            # services.dependencies) — served by
+            # ``ix_task_dep_downstream_current``, since this EXISTS is
+            # evaluated per candidate task on every frontier read.
+            TaskDependency.superseded_at.is_(None),
         )
         .exists()
     )
@@ -2227,6 +2239,9 @@ async def get_build_frontier(
                     # status build — a pre-denormalisation row — is likewise
                     # not something this build put there.
                     blocker.latest_status_build_id.is_distinct_from(build_id),
+                    # Same rule as the gating query above: an edge that no
+                    # longer gates cannot be what this build is waiting on.
+                    TaskDependency.superseded_at.is_(None),
                 )
                 # Registration order, matching `actionable`. Deterministic,
                 # so a truncated list is stable across the polls of one tick.
@@ -2611,8 +2626,16 @@ async def _close_plan_over_dependencies(
     Over-approximating is safe, under-approximating is not. If this run
     would in fact yield different dynamic dependencies, the build completes
     an upstream it did not need — wasted work, correct outcome — whereas
-    missing one deadlocks. So no attempt is made to decide whether a
-    recorded edge is still current.
+    missing one deadlocks. So closure does not *judge* whether an edge is
+    still the right one.
+
+    It does honour an edge that has been **retracted**, which is a
+    different question and one the server can answer exactly: a dynamic
+    edge belongs to one execution attempt of the downstream task, and a
+    transition that begins a new attempt supersedes it (see
+    ``services.dependencies``). A retracted edge gates nothing, so
+    admitting its upstream could not prevent a deadlock — it would only
+    pull an abandoned generation into the plan.
 
     **RUNNING upstreams are admitted like any other.** Excluding them was
     tempting — another build is executing it, so nothing is deadlocked
@@ -2651,6 +2674,13 @@ async def _close_plan_over_dependencies(
                         TaskDependency.downstream_task_id.in_(frontier_pks),
                         Task.latest_status != TaskStatus.COMPLETED,
                         Task.id.not_in(in_plan),
+                        # A retracted edge admits nothing. The deadlock this
+                        # closure exists to prevent is a build gated on
+                        # something outside its plan, and a retracted edge
+                        # does not gate — so admitting its upstream would
+                        # pull an abandoned generation into the plan for no
+                        # benefit at all.
+                        TaskDependency.superseded_at.is_(None),
                     )
                     .distinct()
                 )

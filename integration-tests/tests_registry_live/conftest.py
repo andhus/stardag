@@ -85,6 +85,13 @@ def pytest_configure(config: pytest.Config) -> None:
     # this one records what the answer is supposed to be, and a check that
     # reads its expectation from the thing it is checking proves nothing.
     os.environ[ENV_API_URL] = deployment.api_url
+    # Pin the Modal environment for this process too, not just for the
+    # lookup above. A scenario that reaches Modal directly -- to set up
+    # state its tasks read at run time -- would otherwise resolve whatever
+    # the ambient profile says, and land in a different environment than
+    # the one its own workers run in, which is a very quiet way to get a
+    # scenario that tests nothing.
+    os.environ[ENV_MODAL_ENVIRONMENT] = modal_environment
     _deployment = deployment
 
 

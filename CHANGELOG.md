@@ -55,6 +55,25 @@ For detailed SDK migration guides, see [RELEASE_NOTES.md](RELEASE_NOTES.md).
 
 ### Registry API
 
+- **An abandoned execution attempt no longer drags its dynamic dependencies
+  behind it.** Dynamic edges are written `ON CONFLICT DO NOTHING`, so a
+  task's set only ever grew across attempts — invisible while a generation
+  completes, since completed upstreams do not gate, and expensive the moment
+  one is abandoned part-way: the incomplete children then gate _their own
+  parent_ forever, so the next build that wanted the parent had to reset and
+  re-run a whole generation of work the task was no longer going to ask for.
+  A transition that begins a new attempt — a reset to `PENDING`, or a start
+  of a `SUSPENDED` task by a build that does not hold it — now retracts the
+  previous attempt's dynamic edges (`task_dependencies.superseded_at`, one
+  additive migration; existing rows read as current, so the upgrade changes
+  no scheduling decision). A build resuming its own suspension is the
+  ordinary multi-round walk and retracts nothing. Static edges are untouched:
+  they are declared at every registration, and nothing about an execution
+  withdraws one.
+- Gating, plan closure, `skip-blocked` and `blocked_by_external` ignore
+  retracted edges. The DAG view does not — that attempt really did need
+  those tasks, and the graph is history.
+
 - `POST /builds/{build}/tasks/{task}/cancel` refuses with 409
   `not_claim_holder` when the task is RUNNING, SUSPENDED or INTERRUPTED
   under a different build. Authority to revoke is build-scoped — the
