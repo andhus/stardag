@@ -181,17 +181,101 @@ async def test_a_cascading_cancel_leaves_its_executions_to_be_stopped(
 
 
 @pytest.mark.asyncio
-async def test_a_running_builds_own_cancelled_tasks_are_history(client: AsyncClient):
-    """A retry cycle cancels and re-runs; those cancels are spent, not
-    pending. Listing them would grow without bound over a long build and
-    hand the engine refs it stopped hours ago."""
+async def test_a_task_this_build_cancelled_is_still_its_to_stop(client: AsyncClient):
+    """A cancel is a request to stop, not evidence that anything stopped.
+
+    The server cannot reach a container; it can only record that the claim
+    is gone. So a task this build cancelled is exactly a task whose
+    execution it still has to go and kill — and listing it by status would
+    do the opposite, since CANCELLED is terminal.
+    """
     build = await _new_build(client)
-    await _start(client, build, "retried")
-    await _cancel(client, build, "retried")
+    await _start(client, build, "revoked")
+    await _cancel(client, build, "revoked")
 
     listed = await _executions(client, build)
-    assert listed["build_status"] == "running"
-    assert listed["executions"] == []
+    assert [e["task_id"] for e in listed["executions"]] == ["revoked"]
+    assert listed["executions"][0]["executor_ref"] == "fc-revoked"
+
+
+@pytest.mark.asyncio
+async def test_a_takeover_does_not_hide_the_execution_from_its_owner(
+    client: AsyncClient,
+):
+    """The defect this endpoint was rewritten for, and it is not a corner.
+
+    A cascading cancel releases the claim precisely so the next build can
+    take the task over, and the next build can claim it within seconds —
+    before the cancelled build's tick has run. From that moment the task
+    row names the *new* execution. Answering from the row therefore hands
+    the cancelled build either nothing or somebody else's container; what
+    it needs is the ref it started, which is in the event log and stays
+    true however the claim moves.
+    """
+    owner = await _new_build(client)
+    await _start(client, owner, "shared")
+    await client.post(f"/api/v1/builds/{owner}/cancel", params={"cascade": "true"})
+
+    taker = await _new_build(client)
+    await _reference(client, taker, "shared")
+    await client.post(f"/api/v1/builds/{taker}/tasks/shared/retry")
+    await client.post(
+        f"/api/v1/builds/{taker}/tasks/shared/start",
+        params={"executor": "modal", "executor_ref": "fc-theirs"},
+    )
+    assert await _task_status(client, "shared") == "running"
+
+    mine = await _executions(client, owner)
+    assert [e["executor_ref"] for e in mine["executions"]] == ["fc-shared"], (
+        "the cancelled build must still be handed its own execution, and "
+        "never the one that took the task over"
+    )
+    theirs = await _executions(client, taker)
+    assert [e["executor_ref"] for e in theirs["executions"]] == ["fc-theirs"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("outcome", ["complete", "fail", "suspend"])
+async def test_an_execution_a_worker_reported_over_is_not_listed(
+    client: AsyncClient, outcome: str
+):
+    """A worker said the execution ended, so there is no container left."""
+    build = await _new_build(client)
+    await _start(client, build, "done")
+    await client.post(f"/api/v1/builds/{build}/tasks/done/{outcome}")
+
+    assert (await _executions(client, build))["executions"] == []
+
+
+@pytest.mark.asyncio
+async def test_an_interrupted_execution_is_still_listed(client: AsyncClient):
+    """An interruption ended one attempt, and the backend may be retrying
+    under the same call — the premise the tick's backend-retry guard rests
+    on. So the ref can still be live and is still this build's to stop."""
+    build = await _new_build(client)
+    await _start(client, build, "taken")
+    await client.post(f"/api/v1/builds/{build}/tasks/taken/interrupt")
+
+    listed = await _executions(client, build)
+    assert [e["task_id"] for e in listed["executions"]] == ["taken"]
+
+
+@pytest.mark.asyncio
+async def test_only_the_latest_execution_of_a_task_is_listed(client: AsyncClient):
+    """A retried task has been started more than once by the same build.
+    The earlier call is over — its failure was recorded — and the ref that
+    matters is the one running now."""
+    build = await _new_build(client)
+    await _start(client, build, "flaky")
+    await client.post(f"/api/v1/builds/{build}/tasks/flaky/fail")
+    await client.post(f"/api/v1/builds/{build}/tasks/flaky/retry")
+    await client.post(
+        f"/api/v1/builds/{build}/tasks/flaky/start",
+        params={"executor": "modal", "executor_ref": "fc-second"},
+    )
+
+    listed = await _executions(client, build)
+    assert [e["executor_ref"] for e in listed["executions"]] == ["fc-second"]
 
 
 @pytest.mark.asyncio

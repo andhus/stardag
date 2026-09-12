@@ -713,10 +713,9 @@ async def _cancel_running(
 
     Authority to revoke is build-scoped (see the execution-claims design
     note). What this function may act on is therefore not "everything that
-    looks alive in the frontier" but "the executions this build started",
-    and the registry answers that directly — ``GET .../executions`` returns
-    the tasks whose current status this build produced, with the backend
-    and ref needed to stop them.
+    looks alive in the frontier" but "the executions this build started and
+    has not seen end" — which the registry answers from its event log
+    (``GET .../executions``), with the backend and ref needed to stop each.
 
     Reading it from the frontier instead was wrong in both directions, and
     both cost real damage:
@@ -733,6 +732,14 @@ async def _cancel_running(
       reached it, and ``cancel_detached`` has exactly one caller: this one.
       The claim was released and the execution was not stopped, which is
       how two builds came to run the same task at once.
+
+    Asking about the task's *current* state does not fix the second one
+    either, which a live run had to demonstrate: the whole point of
+    releasing the claim is that the next build may take the task over, and
+    it did so three seconds later — long before the cancelled build's tick
+    ran. By then the task row named the new execution. The ref this build
+    recorded when it started the task is the only thing that stays true,
+    and cancelling it cannot touch anybody else's container.
 
     Each stopped execution is also recorded as TASK_CANCELLED, unless the
     registry already shows it cancelled — a worker killed by the backend

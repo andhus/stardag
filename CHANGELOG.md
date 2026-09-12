@@ -14,7 +14,7 @@ For detailed SDK migration guides, see [RELEASE_NOTES.md](RELEASE_NOTES.md).
   tasks another build has claimed and is executing. A cancelled build
   cancelled them: killing live containers, releasing claims it never held,
   and doing it again on every tick a neighbour's status write earned it. It
-  now asks the registry which executions are its own
+  now asks the registry which executions it started and has not seen end
   (`GET /builds/{id}/executions`, `RegistryABC.build_get_executions`) and
   stops only those. Against a server predating the route it falls back to
   the frontier filtered on the new `latest_status_build_id`; against one
@@ -43,8 +43,13 @@ For detailed SDK migration guides, see [RELEASE_NOTES.md](RELEASE_NOTES.md).
   cascade already enforced it, and `stardag tasks cancel` has documented it
   since it shipped ("pass the build from `latest_status_build_id`"). PENDING
   and terminal statuses stay cancellable by any build; they hold no claim.
-- `GET /builds/{build_id}/executions`: the detached executions this build is
-  responsible for stopping, with the backend and ref to stop them by.
+- `GET /builds/{build_id}/executions`: the detached executions this build
+  started and has not seen end, with the backend and ref to stop them by.
+  Answered from the event log rather than from the task rows, because the
+  question is about the past: releasing a claim is what lets the next build
+  take the task over, so by the time a cancelled build ticks, the row may
+  already name somebody else's execution. A ref is not a claim — cancelling
+  the one this build recorded cannot reach another build's container.
 - `FrontierTaskRef.latest_status_build_id`: who holds each task in the
   frontier, so a scheduler can tell its own executions from a neighbour's.
 - `POST /builds/{id}/notify` flags only a RUNNING build, and reports

@@ -2331,6 +2331,25 @@ async def get_build_frontier(
 # the whole point and a truncated answer costs another round-trip.
 _MAX_BUILD_EXECUTIONS = 500
 
+# Events by which a build learns that an execution it started has ended.
+# A *worker* reported one of these, so there is no container left to stop.
+#
+# TASK_CANCELLED is deliberately absent, and that absence is the whole
+# point of this endpoint: a cancel is a request to stop, not evidence that
+# anything stopped. The server cannot stop an execution — it can only
+# record that the claim is gone — so a task this build cancelled is
+# precisely a task whose container it still has to go and kill.
+#
+# TASK_INTERRUPTED is absent for a different reason: the platform ended one
+# attempt and the backend may be retrying under the same call, so the ref
+# can still be live. That is the premise the tick's backend-retry guard
+# already rests on.
+_EXECUTION_ENDED_EVENTS = (
+    EventType.TASK_COMPLETED,
+    EventType.TASK_FAILED,
+    EventType.TASK_SUSPENDED,
+)
+
 
 @router.get("/{build_id}/executions", response_model=BuildExecutionsResponse)
 async def get_build_executions(
@@ -2338,80 +2357,109 @@ async def get_build_executions(
     db: Annotated[AsyncSession, Depends(get_db)],
     auth: Annotated[SdkAuth, Depends(require_sdk_auth)],
 ):
-    """The detached executions this build must stop.
+    """The detached executions this build started and never saw end.
 
     **The server cannot stop anything** — it can only say what is left to
     stop. Only the engine that spawned an execution can cancel it, and it
     needs three things: which executions are this build's to revoke, which
     backend ran them, and the ref to cancel.
 
-    Answering that from the frontier does not work, and the gap was doing
-    real damage. ``running`` is every RUNNING task in the build's *plan*,
-    which after plan closure includes tasks another build is executing —
-    so a cancelled build reading it cancelled its neighbours' containers
-    and released their claims. And a cascading build cancel writes
-    TASK_CANCELLED for the claims it held, which takes those tasks out of
-    both ``running`` and ``actionable`` while their containers keep
-    running: the claim is released, the next build claims the task, and two
-    executions of it run at once. This endpoint answers the ownership
-    question directly instead.
+    The frontier cannot answer that, and neither can the task rows. Both
+    describe the task's *current* state, and the question here is about the
+    past: what did this build start? Those differ in exactly the case that
+    matters. A cascading build cancel releases the claims this build held —
+    which is the point, it is what lets the next build take those tasks
+    over — and the next build can claim one within seconds, long before the
+    cancelled build's tick gets to run. From that moment the task row names
+    the *new* execution, and the old one, still running, is unreachable:
+    stopping it by task status would either miss it or kill the new one.
+    Both happened.
 
-    Included: tasks whose current status **this build produced**
-    (``latest_status_build_id``) that carry an executor ref, in
-    RUNNING or INTERRUPTED — plus CANCELLED, but only when the build
-    itself is cancelled. That last restriction is what keeps the list
-    meaningful rather than historical: for a running build, a cancelled
-    task is an attempt it already abandoned (a retry cycle), whereas for a
-    cancelled build it is precisely what its own cascade just revoked.
+    So this reads the event log instead, which is where the past is kept.
+    For each task, this build's most recent TASK_STARTED carrying an
+    executor ref — unless this build has since recorded one of
+    :data:`_EXECUTION_ENDED_EVENTS` for it, which means a worker reported
+    the execution over and there is nothing left to kill.
 
-    SUSPENDED is absent throughout: a suspension means the execution
-    yielded and returned, so there is no container to stop.
+    **An execution ref is not a claim.** The claim says who may run the
+    task next; the ref names one execution, and the build that started it
+    owns it however the claim has moved since. Cancelling that ref cannot
+    touch anybody else's container, which is what makes answering from the
+    past safe rather than reckless.
 
     Newest first, capped (see ``_MAX_BUILD_EXECUTIONS``). Cancelling is
-    idempotent at every backend stardag supports, so a caller that stops
-    the same ref twice is harmless; what it must not do is stop one it does
-    not own.
+    idempotent at every backend stardag supports, so a ref stopped twice —
+    or one whose execution already ended without this build hearing about
+    it — costs nothing.
     """
     _raise_if_limit_exceeded(check_rate_limit(auth.workspace_id, limits_settings))
     build = await _get_build_checked(build_id, db, auth)
 
-    statuses = [TaskStatus.RUNNING, TaskStatus.INTERRUPTED]
-    if build.latest_status == BuildStatus.CANCELLED:
-        statuses.append(TaskStatus.CANCELLED)
-
-    rows = (
-        (
-            await db.execute(
-                select(Task)
-                .where(
-                    Task.environment_id == build.environment_id,
-                    Task.latest_status_build_id == build_id,
-                    Task.latest_status.in_(statuses),
-                    Task.latest_executor_ref.is_not(None),
-                    Task.latest_executor.is_not(None),
-                )
-                .order_by(Task.latest_status_at.desc(), Task.id.desc())
-                .limit(_MAX_BUILD_EXECUTIONS + 1)
-            )
+    ref_column = Event.event_metadata["executor_ref"].as_string()
+    executor_column = Event.event_metadata["executor"].as_string()
+    ranked = (
+        select(
+            Event.task_id.label("task_pk"),
+            Event.created_at.label("started_at"),
+            ref_column.label("executor_ref"),
+            executor_column.label("executor"),
+            func.row_number()
+            .over(partition_by=Event.task_id, order_by=Event.created_at.desc())
+            .label("rank"),
         )
-        .scalars()
-        .all()
+        .where(
+            Event.build_id == build_id,
+            Event.event_type == EventType.TASK_STARTED,
+            Event.task_id.is_not(None),
+            # A claiming start records no ref — the spawn has not happened
+            # yet — and there is nothing to stop until the one that does.
+            ref_column.is_not(None),
+        )
+        .subquery()
     )
+    latest = select(ranked).where(ranked.c.rank == 1).subquery()
+    ended = (
+        select(Event.id)
+        .where(
+            Event.build_id == build_id,
+            Event.task_id == latest.c.task_pk,
+            Event.event_type.in_(_EXECUTION_ENDED_EVENTS),
+            Event.created_at > latest.c.started_at,
+        )
+        .exists()
+    )
+    rows = (
+        await db.execute(
+            select(
+                Task,
+                latest.c.executor,
+                latest.c.executor_ref,
+                latest.c.started_at,
+            )
+            .join(latest, latest.c.task_pk == Task.id)
+            .where(~ended)
+            .order_by(latest.c.started_at.desc())
+            .limit(_MAX_BUILD_EXECUTIONS + 1)
+        )
+    ).all()
+
     truncated = len(rows) > _MAX_BUILD_EXECUTIONS
     return BuildExecutionsResponse(
         build_id=build_id,
         build_status=build.latest_status,
         executions=[
             BuildExecutionRef(
-                task_id=t.task_id,
-                latest_status=t.latest_status,
-                # Narrowed to str by the query's IS NOT NULL filters.
-                executor=cast(str, t.latest_executor),
-                executor_ref=cast(str, t.latest_executor_ref),
-                executor_metadata=t.latest_executor_metadata,
-                latest_status_at=t.latest_status_at,
+                task_id=task.task_id,
+                latest_status=task.latest_status,
+                # Narrowed to str by the query's IS NOT NULL filter; an
+                # older event that recorded a ref without a backend name
+                # falls back to the task row's.
+                executor=cast(str, executor or task.latest_executor),
+                executor_ref=cast(str, executor_ref),
+                executor_metadata=task.latest_executor_metadata,
+                latest_status_at=started_at,
             )
-            for t in rows[:_MAX_BUILD_EXECUTIONS]
+            for task, executor, executor_ref, started_at in rows[:_MAX_BUILD_EXECUTIONS]
         ],
         truncated=truncated,
     )

@@ -80,14 +80,27 @@ from a build that does not hold it (`services.claims.may_revoke`, 409
 `not_claim_holder`), and the cascade's status tuple and the guard's are one
 constant rather than two.
 
-**A build also has to be able to find what it owns.** The frontier cannot
-say: `running` is plan-scoped, not ownership-scoped, and a cascading cancel
+**A build also has to be able to find what it started**, and that is a
+question about the past, not about the present. The frontier cannot answer
+it: `running` is plan-scoped, not ownership-scoped, and a cascading cancel
 moves the build's own tasks to CANCELLED, out of both `running` and
 `actionable`, while their containers keep going — so the cascade released
-the claims and nothing stopped the executions, and the next claimant ran a
-second copy of a task still executing. `GET /builds/{id}/executions`
-answers the ownership question directly, and the tick's cancel pass reads
-it instead of the frontier.
+the claims, nothing stopped the executions, and the next claimant ran a
+second copy of a task still executing.
+
+Nor can the task row, and the reason is worth stating because the first fix
+here got it wrong. Releasing the claim is _meant_ to let the next build take
+the task over, and it does so in seconds — measured at three, in a live run,
+against a cancelled build whose tick had not started. From that moment the
+row names the new execution, and the old one is unreachable by status:
+stopping it that way either misses it or kills the wrong container.
+
+So `GET /builds/{id}/executions` answers from the event log — the ref this
+build recorded when it started the task, unless a worker has since reported
+that execution over. **An execution ref is not a claim.** The claim says who
+may run the task next; the ref names one execution, and the build that
+started it owns it however the claim has moved since. That is what makes
+cancelling it safe: it cannot reach anybody else's container.
 
 ### Revocation is not a result
 

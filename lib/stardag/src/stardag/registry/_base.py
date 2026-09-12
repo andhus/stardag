@@ -229,14 +229,22 @@ class BuildFrontier(StardagBaseModel):
 
 
 class BuildExecution(StardagBaseModel):
-    """A detached execution a build is responsible for stopping.
+    """A detached execution this build started and has not seen end.
 
-    The answer to "what is mine to cancel?", which the frontier cannot
-    give. Two shapes are missing from it, and both mattered: a task another
-    build is running appears in this build's ``running`` (plan scope, not
-    ownership), and a task this build's own cascading cancel already moved
-    to CANCELLED appears in neither ``running`` nor ``actionable`` while its
-    container keeps going.
+    The answer to "what is mine to stop?", which no view of a task's
+    *current* state can give — and the difference is not academic. A
+    cascading cancel releases the claims a build held so the next build can
+    take those tasks over, and the next build can claim one within seconds,
+    before the cancelled build's tick has run. From then on the task row
+    names the new execution and the old one, still running, is unreachable
+    by status: stopping it that way either misses it or kills somebody
+    else's container. Both happened.
+
+    So the registry answers from the event log: the ref this build recorded
+    when it started the task, unless a worker has since reported the
+    execution over. **A ref is not a claim** — the claim says who may run
+    the task next, the ref names one execution, and the build that started
+    it owns it however the claim has moved since.
     """
 
     task_id: str
