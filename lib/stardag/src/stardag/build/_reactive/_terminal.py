@@ -13,6 +13,7 @@ from stardag.build._base import (
 from stardag.build._task_store import BuildTaskStore
 from stardag.exceptions import NotFoundError, is_missing_route_error
 from stardag.registry import (
+    BuildExecution,
     BuildFrontier,
     FrontierExternalBlocker,
     RegistryABC,
@@ -20,6 +21,7 @@ from stardag.registry import (
 
 from stardag.build._reactive._budgets import _retry_allowed
 from stardag.build._reactive._frontier_actions import (
+    _CANCELLED_STATUS,
     _INTERRUPTED_STATUS,
     _RUNNING_STATUSES,
     _TERMINAL_BUILD_STATUSES,
@@ -707,37 +709,108 @@ async def _cancel_running(
     task_store: BuildTaskStore,
     summary: TickSummary,
 ) -> None:
-    """Best-effort cancel of all running detached executions in the build.
+    """Stop the detached executions **this build** is responsible for.
 
-    Uses the frontier's full ``running`` list — a RUNNING task inside the
-    dynamic-dep registration window drops out of ``actionable`` but must
-    still be cancelled. Falls back to ``actionable`` for servers predating
-    the field.
+    Authority to revoke is build-scoped (see the execution-claims design
+    note). What this function may act on is therefore not "everything that
+    looks alive in the frontier" but "the executions this build started",
+    and the registry answers that directly — ``GET .../executions`` returns
+    the tasks whose current status this build produced, with the backend
+    and ref needed to stop them.
 
-    Each successfully cancelled execution is also recorded as
-    TASK_CANCELLED (best-effort): a worker killed by the executor's cancel
-    can't reliably self-report, and without the event the task dangles
-    RUNNING — keeping its pending descendants out of the skip-blocked
-    closure (cancelled is a seed status) and holding any concurrency-limit
-    slots forever.
+    Reading it from the frontier instead was wrong in both directions, and
+    both cost real damage:
 
-    **INTERRUPTED tasks are included, and for both of those reasons.** Such
-    a task may still have a live execution — that is the whole premise of
-    the backend-retry guard in ``_act_on_frontier`` — so a build that dies
-    without cancelling it leaves a container running that nobody is waiting
-    for. And left INTERRUPTED under a terminal build it is a permanent
-    wedge for every *other* build gated on it: ``_OWNER_DRIVEN_STATUSES``
-    reads interrupted as "the owner will move it", so a neighbour waits and
-    then fails, where a CANCELLED task would have been reset and run. The
-    argument is the one ``CASCADE_CANCEL_STATUSES`` already makes for
-    SUSPENDED, word for word.
+    - ``running`` is every RUNNING task in the build's *plan*, and after
+      plan closure that includes tasks another build claimed and is
+      executing. Cancelling one killed a live worker and released its
+      claim, so the task was handed to a third build while the second was
+      still writing its target. A cancelled build did this on *every* tick
+      it received, for as long as neighbours kept touching its tasks.
+    - A cascading build cancel writes TASK_CANCELLED for the claims this
+      build held — releasing them — while the containers keep running. Such
+      a task is in neither ``running`` nor ``actionable``, so nothing
+      reached it, and ``cancel_detached`` has exactly one caller: this one.
+      The claim was released and the execution was not stopped, which is
+      how two builds came to run the same task at once.
 
-    Known gap: an interrupted task whose upstream is incomplete again (a
-    dynamic dependency registered after it ran) is in neither ``running``
-    nor ``actionable``, so nothing here reaches it. Narrow, and the
-    server-side cascade — which queries the task table rather than the
-    frontier — closes it whenever the build is cancelled through the API.
+    Each stopped execution is also recorded as TASK_CANCELLED, unless the
+    registry already shows it cancelled — a worker killed by the backend
+    cannot reliably self-report, and without the event the task dangles
+    RUNNING, keeping its pending descendants out of the skip-blocked
+    closure and holding its concurrency-limit slots forever.
+
+    Cancelling is best-effort throughout and idempotent at the backend, so
+    a ref stopped twice is harmless. What must not happen is stopping one
+    this build does not own.
     """
+    for item in await _executions_to_stop(frontier, build_id, registry, summary):
+        task = await _load_task(item.task_id, registry, task_store, quiet=True)
+        if task is None:
+            continue
+        try:
+            await task_executor.cancel_detached(task, item.executor, item.executor_ref)
+            summary.cancelled_refs += 1
+        except Exception as e:
+            logger.warning(
+                f"Failed to cancel detached execution "
+                f"{item.executor_ref!r} for task {item.task_id}: {e}"
+            )
+            continue
+        if item.latest_status == _CANCELLED_STATUS:
+            # Already revoked — the build cancel's cascade wrote the event
+            # when it released the claim. A second one would say nothing new.
+            continue
+        try:
+            await registry.task_cancel_aio(build_id, task)
+        except Exception as e:
+            logger.warning(f"Failed to record cancellation of task {item.task_id}: {e}")
+
+
+async def _executions_to_stop(
+    frontier: BuildFrontier,
+    build_id: UUID,
+    registry: RegistryABC,
+    summary: TickSummary,
+) -> list[BuildExecution]:
+    """Ask the registry what is this build's to stop; fall back if it can't.
+
+    The fallback is for a server predating the route, and it is the old
+    frontier-derived list with the ownership filter the frontier can now
+    support — ``latest_status_build_id``. A server old enough to lack
+    *that* too reports None, and None cannot be read as "not mine": it
+    means "this server cannot say", so the item is acted on exactly as
+    before. That keeps an old server no worse off than it is today, which
+    is the rule every version-skew decision here follows, while the two
+    shapes only the route can see (a foreign claim on a server that does
+    report the owner, and this build's own cascaded executions) are
+    handled as soon as the server is new enough to know about them.
+    """
+    try:
+        listed = await registry.build_get_executions_aio(build_id)
+        if listed.truncated:
+            logger.info(
+                f"Build {build_id} has more executions to stop than the "
+                "registry returns at once; stopping this batch and leaving "
+                "the rest to the next pass."
+            )
+        return list(listed.executions)
+    except NotFoundError as e:
+        if not is_missing_route_error(e):
+            raise
+        logger.warning(
+            "Registry server does not support the build executions route; "
+            "falling back to the frontier, which cannot see executions this "
+            "build has already cancelled."
+        )
+    except NotImplementedError:
+        pass
+    except Exception as e:
+        logger.warning(
+            f"Could not read the executions of build {build_id} ({e}); "
+            "falling back to the frontier."
+        )
+
     cancellable = _RUNNING_STATUSES + (_INTERRUPTED_STATUS,)
     # Re-read, because the snapshot the caller holds is the PRE-action one.
     # ``_act_on_frontier`` has already run by the time terminal handling
@@ -745,12 +818,6 @@ async def _cancel_running(
     # a task it resumed or spawned this pass is live under a ref the
     # snapshot has never seen, and a task the snapshot lists as INTERRUPTED
     # may now be RUNNING under a *different* ref.
-    #
-    # Acting on the stale copy is not merely incomplete, it is harmful:
-    # cancelling the old ref is a no-op while the TASK_CANCELLED it records
-    # releases the claim on the execution that just started — handing the
-    # task to any other build while a container is still writing its
-    # target. One extra read on a path that runs once, at build death.
     try:
         frontier = await registry.build_get_frontier_aio(build_id)
     except Exception as e:
@@ -759,36 +826,34 @@ async def _cancel_running(
             f"cancelling ({e}); falling back to the pre-action snapshot, "
             "which may miss executions started in this pass."
         )
-    running_items = list(frontier.running or [])
-    seen = {item.task_id for item in running_items}
-    running_items += [
+    items = list(frontier.running or [])
+    seen = {item.task_id for item in items}
+    items += [
         item
         for item in frontier.actionable
         if item.latest_status in cancellable and item.task_id not in seen
     ]
-    for item in running_items:
-        if (
-            item.latest_status in cancellable
-            and item.latest_executor is not None
-            and item.latest_executor_ref is not None
-        ):
-            task = await _load_task(item.task_id, registry, task_store, quiet=True)
-            if task is None:
-                continue
-            try:
-                await task_executor.cancel_detached(
-                    task, item.latest_executor, item.latest_executor_ref
-                )
-                summary.cancelled_refs += 1
-            except Exception as e:
-                logger.warning(
-                    f"Failed to cancel detached execution "
-                    f"{item.latest_executor_ref!r} for task {item.task_id}: {e}"
-                )
-                continue
-            try:
-                await registry.task_cancel_aio(build_id, task)
-            except Exception as e:
-                logger.warning(
-                    f"Failed to record cancellation of task {item.task_id}: {e}"
-                )
+    executions: list[BuildExecution] = []
+    for item in items:
+        if item.latest_status not in cancellable:
+            continue
+        if item.latest_executor is None or item.latest_executor_ref is None:
+            continue
+        owner = item.latest_status_build_id
+        if owner is not None and owner != build_id:
+            logger.info(
+                f"Not stopping the execution of task {item.task_id}: it is "
+                f"held by build {owner}, not this one."
+            )
+            continue
+        executions.append(
+            BuildExecution(
+                task_id=item.task_id,
+                latest_status=item.latest_status,
+                executor=item.latest_executor,
+                executor_ref=item.latest_executor_ref,
+                executor_metadata=item.latest_executor_metadata,
+                latest_status_at=item.latest_status_at,
+            )
+        )
+    return executions

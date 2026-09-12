@@ -59,6 +59,12 @@ _TERMINAL_BUILD_STATUSES = ("completed", "failed", "cancelled")
 # task, and ``_act_on_interrupted`` decides what happens to it.
 _INTERRUPTED_STATUS = "interrupted"
 
+# A revoked task. Terminal, so it never appears in the frontier's
+# actionable or running lists — which is exactly why a build that cascaded
+# its own cancel through the server needs the executions route to find the
+# containers it is still responsible for stopping.
+_CANCELLED_STATUS = "cancelled"
+
 
 # Slack added to an executor's own timeout when deriving a claim TTL. It
 # covers the ways the claim's clock and the execution's clock differ: the

@@ -30,6 +30,14 @@ class FrontierTaskRef(StardagBaseModel):
     # When the current status was recorded (None on servers predating the
     # field).
     latest_status_at: datetime | None = None
+    # The build whose event produced the current status. The claim
+    # holder, for any status a task can be held in — and the field that
+    # separates this build's executions from a neighbour's: ``running``
+    # is every RUNNING task in the *plan*, which after plan closure
+    # includes tasks another build is executing. Acting destructively
+    # on one of those kills somebody else's worker. None on servers
+    # predating the field, and on a task whose owning build is gone.
+    latest_status_build_id: UUID | None = None
     # When the RUNNING execution claim stops being honoured, if ever — the
     # one piece of *third-party evaluable* liveness evidence a claim
     # carries: past it the claim is re-claimable and stops occupying
@@ -218,6 +226,36 @@ class BuildFrontier(StardagBaseModel):
     # backstop marker check — the Modal tick reads it from the lighter
     # ``build_get`` before acquiring the lease.
     reactive_tick_kwargs: dict[str, Any] | None = None
+
+
+class BuildExecution(StardagBaseModel):
+    """A detached execution a build is responsible for stopping.
+
+    The answer to "what is mine to cancel?", which the frontier cannot
+    give. Two shapes are missing from it, and both mattered: a task another
+    build is running appears in this build's ``running`` (plan scope, not
+    ownership), and a task this build's own cascading cancel already moved
+    to CANCELLED appears in neither ``running`` nor ``actionable`` while its
+    container keeps going.
+    """
+
+    task_id: str
+    latest_status: str
+    executor: str
+    executor_ref: str
+    executor_metadata: dict[str, Any] | None = None
+    latest_status_at: datetime | None = None
+
+
+class BuildExecutions(StardagBaseModel):
+    """Result of ``build_get_executions`` — see :class:`BuildExecution`."""
+
+    build_id: UUID
+    build_status: str
+    executions: list[BuildExecution] = []
+    # The server capped the list. Stopping an execution takes it out of the
+    # answer, so a caller that acts and asks again makes progress.
+    truncated: bool = False
 
 
 class WakeCandidate(StardagBaseModel):
@@ -1034,6 +1072,21 @@ class RegistryABC(metaclass=abc.ABCMeta):
     async def build_get_frontier_aio(self, build_id: UUID) -> BuildFrontier:
         """Async version of build_get_frontier."""
         return self.build_get_frontier(build_id)
+
+    def build_get_executions(self, build_id: UUID) -> BuildExecutions:
+        """Detached executions this build must stop (``GET .../executions``).
+
+        Authority to revoke is build-scoped, so an engine tearing a build
+        down has to know which executions are its own. Default: not
+        supported — same shape as the frontier, and for the same reason.
+        """
+        raise NotImplementedError(
+            f"{type(self).__name__} does not support build_get_executions"
+        )
+
+    async def build_get_executions_aio(self, build_id: UUID) -> BuildExecutions:
+        """Async version of build_get_executions."""
+        return self.build_get_executions(build_id)
 
     def build_get(self, build_id: UUID) -> BuildInfo:
         """Return a slim build record (``GET /builds/{id}``).

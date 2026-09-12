@@ -37,12 +37,58 @@ branch.
 from __future__ import annotations
 
 from datetime import datetime, timedelta
+from uuid import UUID
 
 from sqlalchemy import ColumnElement, or_
 
 from stardag_api.config import claim_settings
 from stardag_api.models import Task, TaskStatus
 from stardag_api.models.base import as_utc, utc_now
+
+
+# Statuses in which a task belongs to the build whose event produced them.
+#
+# RUNNING holds the execution claim and the concurrency-limit slots.
+# SUSPENDED is an execution that yielded for dynamic dependencies and will
+# be resumed; INTERRUPTED is one the platform stopped. Neither holds a
+# slot, but all three describe work a *particular* build set in motion, and
+# only that build may revoke it — see :func:`may_revoke`.
+#
+# PENDING is deliberately absent: it holds nothing, and a task one build
+# registered may be referenced by a live build elsewhere
+# (TASK_REFERENCED leaves ``latest_status_build_id`` alone, so ownership
+# scoping cannot tell the two apart).
+BUILD_OWNED_STATUSES = (
+    TaskStatus.RUNNING,
+    TaskStatus.SUSPENDED,
+    TaskStatus.INTERRUPTED,
+)
+
+
+def may_revoke(task: Task, build_id: UUID) -> bool:
+    """Whether ``build_id`` is entitled to cancel ``task``.
+
+    The design note's *authority to revoke is build-scoped*, enforced
+    rather than assumed. Cancelling a task in a :data:`BUILD_OWNED_STATUSES`
+    status releases its execution claim and its limit slots; doing that on
+    behalf of a build that did not put it there declares somebody else's
+    live worker dead, and hands their task to the next claimant while their
+    container is still writing into it. ``cascade_cancel_build_tasks``
+    already scoped itself this way; the per-task route did not, which is
+    how a cancelled build came to kill a later build's executions.
+
+    Everything else stays cancellable. PENDING and the terminal statuses
+    hold no claim, so a cancel there is bookkeeping, and a neighbour reads
+    CANCELLED as a revocation it may reset and run.
+
+    A NULL ``latest_status_build_id`` is permitted too: the owning build
+    row is gone (the FK is ``ON DELETE SET NULL``), so nobody is left to
+    revoke it and refusing would strand the claim forever.
+    """
+    if task.latest_status not in BUILD_OWNED_STATUSES:
+        return True
+    owner = task.latest_status_build_id
+    return owner is None or owner == build_id
 
 
 def claim_ttl(ttl_seconds: int | None) -> int:

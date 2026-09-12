@@ -69,6 +69,26 @@ cannot release claims held by build C's live workers. Authority to revoke
 and permission to complete are different questions, and only the first
 belongs to a build.
 
+That rule was stated here and enforced in exactly one place — the cascade —
+while the per-task cancel route accepted a revocation from any build in the
+environment. A cancelled reactive build used that route on every RUNNING
+task in its _plan_, which after plan closure includes tasks a later build
+had claimed: it killed their containers and released their claims, the
+other build recorded failures and retried, and the next tick killed them
+again. The route now refuses a cancel of a task in a build-owned status
+from a build that does not hold it (`services.claims.may_revoke`, 409
+`not_claim_holder`), and the cascade's status tuple and the guard's are one
+constant rather than two.
+
+**A build also has to be able to find what it owns.** The frontier cannot
+say: `running` is plan-scoped, not ownership-scoped, and a cascading cancel
+moves the build's own tasks to CANCELLED, out of both `running` and
+`actionable`, while their containers keep going — so the cascade released
+the claims and nothing stopped the executions, and the next claimant ran a
+second copy of a task still executing. `GET /builds/{id}/executions`
+answers the ownership question directly, and the tick's cancel pass reads
+it instead of the frontier.
+
 ### Revocation is not a result
 
 "Acts on everything in its plan" is not "resets everything in its plan". A

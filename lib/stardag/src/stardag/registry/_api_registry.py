@@ -37,6 +37,7 @@ from stardag.registry._base import (
     SchedulerLeaseResult,
     StartClaimResult,
     BuildCancelResult,
+    BuildExecutions,
     BuildFrontier,
     BuildInfo,
     BuildListPage,
@@ -1900,6 +1901,26 @@ class APIRegistry(RegistryABC):
             operation=f"Get frontier for build {build_id}",
         )
         return BuildFrontier.model_validate(response.json())
+
+    def build_get_executions(self, build_id: UUID) -> BuildExecutions:
+        """Detached executions this build must stop."""
+        response = self._request(
+            "GET",
+            f"{self.api_url}/api/v1/builds/{build_id}/executions",
+            params=self._get_params(),
+            operation=f"Get executions for build {build_id}",
+        )
+        return BuildExecutions.model_validate(response.json())
+
+    async def build_get_executions_aio(self, build_id: UUID) -> BuildExecutions:
+        """Async version - detached executions this build must stop."""
+        response = await self._arequest(
+            "GET",
+            f"{self.api_url}/api/v1/builds/{build_id}/executions",
+            params=self._get_params(),
+            operation=f"Get executions for build {build_id}",
+        )
+        return BuildExecutions.model_validate(response.json())
 
     def build_get(self, build_id: UUID) -> BuildInfo:
         """Return a slim build record (lighter than the frontier)."""

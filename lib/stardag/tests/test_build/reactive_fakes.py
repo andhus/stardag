@@ -34,6 +34,8 @@ from stardag.build._reactive import (
 from stardag.exceptions import NotFoundError
 from stardag.registry import (
     SchedulerLeaseResult,
+    BuildExecution,
+    BuildExecutions,
     BuildFrontier,
     BuildNotifyResult,
     FrontierExternalBlocker,
@@ -176,6 +178,13 @@ class FakeReactiveRegistry(NoOpRegistry):
         self.tick_summary_error: Exception | None = None
         # Set to make the frontier fetch blow up, i.e. crash the tick itself.
         self.frontier_error: Exception | None = None
+        # Set False to emulate a server predating the executions route: the
+        # tick falls back to filtering the frontier itself.
+        self.serves_executions = True
+        # ...and False to emulate one predating the owner on frontier refs,
+        # where the fallback cannot filter by ownership either.
+        self.serves_status_build_id = True
+        self.executions_calls: list[UUID] = []
 
     # --- test setup helpers ---
 
@@ -642,6 +651,44 @@ class FakeReactiveRegistry(NoOpRegistry):
             self.lease_on_release()
         return SchedulerLeaseResult(build_id=build_id, held=held)
 
+    async def build_get_executions_aio(self, build_id) -> BuildExecutions:
+        """Mirrors the API: this build's own executions, with a ref.
+
+        Ownership is ``status_build_id`` being absent (this build put the
+        task where it is). CANCELLED joins the live statuses only when the
+        build itself is cancelled — for a running build a cancelled task is
+        an attempt it already abandoned, not a container to chase.
+        """
+        self.executions_calls.append(build_id)
+        if not self.serves_executions:
+            # FastAPI's own unknown-path 404, which is how the SDK tells
+            # "this server is too old" from "no such build".
+            raise NotFoundError("Not Found", detail="Not Found")
+        statuses = {"running", "interrupted"}
+        if self.build_status == "cancelled":
+            statuses.add("cancelled")
+        executions = []
+        for tid, status in self.statuses.items():
+            if status not in statuses or tid in self.status_build_id:
+                continue
+            executor, executor_ref = self.refs.get(tid, (None, None))
+            if executor is None or executor_ref is None:
+                continue
+            executions.append(
+                BuildExecution(
+                    task_id=tid,
+                    latest_status=status,
+                    executor=executor,
+                    executor_ref=executor_ref,
+                    latest_status_at=self.status_at.get(tid),
+                )
+            )
+        return BuildExecutions(
+            build_id=build_id,
+            build_status=self.build_status,
+            executions=executions,
+        )
+
     async def build_get_frontier_aio(self, build_id) -> BuildFrontier:
         if self.frontier_error is not None:
             raise self.frontier_error
@@ -654,6 +701,15 @@ class FakeReactiveRegistry(NoOpRegistry):
                 latest_executor=executor,
                 latest_executor_ref=executor_ref,
                 latest_status_at=self.status_at.get(tid),
+                # Absent from status_build_id = this build's own doing,
+                # which is what the API reports for a task this build
+                # started. An explicit None is a row whose owning build is
+                # gone (or a server predating the field).
+                latest_status_build_id=(
+                    self.status_build_id.get(tid, build_id)
+                    if self.serves_status_build_id
+                    else None
+                ),
                 latest_status_expires_at=self.expires_at.get(tid),
                 attempt_count=(
                     self.attempt_count(tid) if self.serves_attempt_counts else None

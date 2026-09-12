@@ -3,7 +3,7 @@
 import json
 import logging
 from datetime import datetime, timedelta
-from typing import Annotated, Any, Mapping, Sequence
+from typing import Annotated, Any, Mapping, Sequence, cast
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -55,6 +55,8 @@ from stardag_api.schemas import (
     AddDependenciesResponse,
     BuildCancelResponse,
     BuildCreate,
+    BuildExecutionRef,
+    BuildExecutionsResponse,
     BuildFrontierResponse,
     BuildListResponse,
     BuildNotifyResponse,
@@ -93,7 +95,11 @@ from stardag_api.services.build_cleanup import (
     last_activity_at,
     select_cancellable_builds,
 )
-from stardag_api.services.claims import claim_is_live, live_claim_filter
+from stardag_api.services.claims import (
+    claim_is_live,
+    live_claim_filter,
+    may_revoke,
+)
 from stardag_api.services.wakeups import (
     MAX_WAKE_CANDIDATES,
     MAX_LEASE_TTL_SECONDS,
@@ -613,6 +619,25 @@ async def _create_task_event(
                 status_code=409,
                 detail={"error_code": "task_already_completed"},
             )
+
+    if event_type == EventType.TASK_CANCELLED and not may_revoke(db_task, build_id):
+        # Authority to revoke is build-scoped. Evaluated on the same
+        # FOR-UPDATE-locked row as the claim above, so the answer cannot go
+        # stale between the check and the event: a caller that held the
+        # claim a moment ago and lost it to an expiry takeover is refused
+        # here rather than silently releasing the new holder's claim.
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error_code": "not_claim_holder",
+                "latest_status": db_task.latest_status,
+                "latest_status_build_id": (
+                    str(db_task.latest_status_build_id)
+                    if db_task.latest_status_build_id
+                    else None
+                ),
+            },
+        )
 
     # Build event_metadata from commit_hash and any extra metadata
     event_metadata: dict | None = None
@@ -1722,7 +1747,21 @@ async def notify_build(
     _raise_if_limit_exceeded(check_rate_limit(auth.workspace_id, limits_settings))
     build = await _get_build_checked(build_id, db, auth)
     now = utc_now()
-    build.needs_tick_at = now
+    # Only a RUNNING build can act on a wake-up, so only a RUNNING build is
+    # flagged here. This is the same restriction ``_flag_builds`` applies to
+    # the transition hook, and its absence here was a live loop: a cancelled
+    # build's workers keep running until a tick stops them, every one of
+    # them notifies on its way out, and each notify re-flagged the build for
+    # the next drain to hand out again — forever, for as long as neighbours
+    # kept touching its tasks.
+    #
+    # A cancelled build still gets its one tick: its own cancel sets the
+    # flag (``flag_build``), which survives here and is reported below, so
+    # the first caller to see it still spawns. Once that tick clears the
+    # flag, later notifies report False and nobody spawns again.
+    if build.latest_status == BuildStatus.RUNNING:
+        build.needs_tick_at = now
+    needs_tick = build.needs_tick_at is not None
     # Stamp the hand-out mark in the SAME transaction as the flag, on the
     # assumption that the caller will spawn: a concurrent
     # ``POST /builds/wake-candidates`` must never see this build flagged
@@ -1730,7 +1769,7 @@ async def notify_build(
     # below says a scheduler is live — so the caller will *not* spawn —
     # the stamp is put back, and the build is exactly as it was.
     previous_stamp = build.tick_requested_at
-    if can_spawn:
+    if can_spawn and needs_tick:
         await mark_tick_requested(db, build, now=now)
     await db.commit()
     # Re-read from the database, not off the ORM instance. The session is
@@ -1741,11 +1780,11 @@ async def notify_build(
     # still held once the flag was already durable".
     await db.refresh(build, ["scheduler_lease_until"])
     scheduler_live = lease_is_live(build)
-    if scheduler_live and can_spawn:
+    if scheduler_live and can_spawn and needs_tick:
         build.tick_requested_at = previous_stamp
         await db.commit()
     return BuildNotifyResponse(
-        build_id=build_id, needs_tick=True, scheduler_live=scheduler_live
+        build_id=build_id, needs_tick=needs_tick, scheduler_live=scheduler_live
     )
 
 
@@ -2258,6 +2297,10 @@ async def get_build_frontier(
             # long with no executor ref"); omitting it silently disabled
             # those guards, since the field defaults to None.
             latest_status_at=t.latest_status_at,
+            # Who holds it. `running` is every RUNNING task in this build's
+            # plan, not every task this build started, so without this a
+            # scheduler cannot tell its own executions from a neighbour's.
+            latest_status_build_id=t.latest_status_build_id,
             # ...and this turns that heuristic into evidence: past the
             # expiry the server itself will hand the task to the next
             # claimant, so a scheduler can stop inferring from elapsed time.
@@ -2281,6 +2324,96 @@ async def get_build_frontier(
         blocked_by_external_truncated=blocked_by_external_truncated,
         reactive_app_name=build.reactive_app_name,
         reactive_tick_kwargs=build.reactive_tick_kwargs,
+    )
+
+
+# Cap on GET /builds/{id}/executions. Generous, because stopping them is
+# the whole point and a truncated answer costs another round-trip.
+_MAX_BUILD_EXECUTIONS = 500
+
+
+@router.get("/{build_id}/executions", response_model=BuildExecutionsResponse)
+async def get_build_executions(
+    build_id: UUID,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    auth: Annotated[SdkAuth, Depends(require_sdk_auth)],
+):
+    """The detached executions this build must stop.
+
+    **The server cannot stop anything** — it can only say what is left to
+    stop. Only the engine that spawned an execution can cancel it, and it
+    needs three things: which executions are this build's to revoke, which
+    backend ran them, and the ref to cancel.
+
+    Answering that from the frontier does not work, and the gap was doing
+    real damage. ``running`` is every RUNNING task in the build's *plan*,
+    which after plan closure includes tasks another build is executing —
+    so a cancelled build reading it cancelled its neighbours' containers
+    and released their claims. And a cascading build cancel writes
+    TASK_CANCELLED for the claims it held, which takes those tasks out of
+    both ``running`` and ``actionable`` while their containers keep
+    running: the claim is released, the next build claims the task, and two
+    executions of it run at once. This endpoint answers the ownership
+    question directly instead.
+
+    Included: tasks whose current status **this build produced**
+    (``latest_status_build_id``) that carry an executor ref, in
+    RUNNING or INTERRUPTED — plus CANCELLED, but only when the build
+    itself is cancelled. That last restriction is what keeps the list
+    meaningful rather than historical: for a running build, a cancelled
+    task is an attempt it already abandoned (a retry cycle), whereas for a
+    cancelled build it is precisely what its own cascade just revoked.
+
+    SUSPENDED is absent throughout: a suspension means the execution
+    yielded and returned, so there is no container to stop.
+
+    Newest first, capped (see ``_MAX_BUILD_EXECUTIONS``). Cancelling is
+    idempotent at every backend stardag supports, so a caller that stops
+    the same ref twice is harmless; what it must not do is stop one it does
+    not own.
+    """
+    _raise_if_limit_exceeded(check_rate_limit(auth.workspace_id, limits_settings))
+    build = await _get_build_checked(build_id, db, auth)
+
+    statuses = [TaskStatus.RUNNING, TaskStatus.INTERRUPTED]
+    if build.latest_status == BuildStatus.CANCELLED:
+        statuses.append(TaskStatus.CANCELLED)
+
+    rows = (
+        (
+            await db.execute(
+                select(Task)
+                .where(
+                    Task.environment_id == build.environment_id,
+                    Task.latest_status_build_id == build_id,
+                    Task.latest_status.in_(statuses),
+                    Task.latest_executor_ref.is_not(None),
+                    Task.latest_executor.is_not(None),
+                )
+                .order_by(Task.latest_status_at.desc(), Task.id.desc())
+                .limit(_MAX_BUILD_EXECUTIONS + 1)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    truncated = len(rows) > _MAX_BUILD_EXECUTIONS
+    return BuildExecutionsResponse(
+        build_id=build_id,
+        build_status=build.latest_status,
+        executions=[
+            BuildExecutionRef(
+                task_id=t.task_id,
+                latest_status=t.latest_status,
+                # Narrowed to str by the query's IS NOT NULL filters.
+                executor=cast(str, t.latest_executor),
+                executor_ref=cast(str, t.latest_executor_ref),
+                executor_metadata=t.latest_executor_metadata,
+                latest_status_at=t.latest_status_at,
+            )
+            for t in rows[:_MAX_BUILD_EXECUTIONS]
+        ],
+        truncated=truncated,
     )
 
 
@@ -3471,7 +3604,22 @@ async def cancel_task(
     auth: Annotated[SdkAuth, Depends(require_sdk_auth)],
     commit_hash: str | None = None,
 ):
-    """Cancel a task within a build (by user, or by the build engine)."""
+    """Cancel a task, releasing its execution claim and limit slots.
+
+    **Only the build that put the task where it is may cancel it.** A task
+    that is RUNNING, SUSPENDED or INTERRUPTED belongs to the build whose
+    event produced that status, and a cancel from anyone else is refused
+    with 409 ``not_claim_holder`` — see
+    :func:`stardag_api.services.claims.may_revoke`. Everything else stays
+    cancellable by any build in the environment: PENDING and the terminal
+    statuses hold no claim.
+
+    Operators reach a stranded claim the same way they always did, by
+    passing the build from ``latest_status_build_id`` (``stardag tasks
+    list`` prints it, and ``stardag tasks cancel`` has documented that
+    argument as the claim holder since it shipped). What the guard removes
+    is a build declaring somebody else's live worker dead.
+    """
     return await _create_task_event(
         build_id, task_id, EventType.TASK_CANCELLED, db, auth, commit_hash=commit_hash
     )

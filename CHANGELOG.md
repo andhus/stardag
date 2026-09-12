@@ -6,6 +6,50 @@ For detailed SDK migration guides, see [RELEASE_NOTES.md](RELEASE_NOTES.md).
 
 ## [Unreleased]
 
+### SDK
+
+- **A cancelled or failing build no longer stops other builds' executions.**
+  The tick's cancel pass read the frontier's `running` list, which is every
+  RUNNING task in the build's _plan_ — and after plan closure that includes
+  tasks another build has claimed and is executing. A cancelled build
+  cancelled them: killing live containers, releasing claims it never held,
+  and doing it again on every tick a neighbour's status write earned it. It
+  now asks the registry which executions are its own
+  (`GET /builds/{id}/executions`, `RegistryABC.build_get_executions`) and
+  stops only those. Against a server predating the route it falls back to
+  the frontier filtered on the new `latest_status_build_id`; against one
+  predating that field too, it behaves exactly as before.
+- **`stardag builds cancel --cascade` now actually stops the executions it
+  releases.** The cascade writes TASK_CANCELLED for the claims the build
+  held — which is what lets the next build take those tasks over — but a
+  cascaded task is CANCELLED and therefore in neither `running` nor
+  `actionable`, so the one caller of `cancel_detached` could not see it.
+  The claim was released and the container kept running, and the next
+  claimant started a second execution of the same task. The executions
+  route reports them, so the one tick a cancel asks for now stops them.
+- **A worker no longer spawns a tick for a build that cannot use one.** A
+  cancelled build's workers keep running until a tick stops them, and each
+  one re-flagged the build on its way out, so every drain in the
+  environment handed it out again. `POST /builds/{id}/notify` now answers
+  `needs_tick` truthfully and the worker skips the spawn when it is false.
+  The one tick a cancel wants is unaffected: the cancel sets that flag
+  itself, and it survives until a tick drains it.
+
+### Registry API
+
+- `POST /builds/{build}/tasks/{task}/cancel` refuses with 409
+  `not_claim_holder` when the task is RUNNING, SUSPENDED or INTERRUPTED
+  under a different build. Authority to revoke is build-scoped — the
+  cascade already enforced it, and `stardag tasks cancel` has documented it
+  since it shipped ("pass the build from `latest_status_build_id`"). PENDING
+  and terminal statuses stay cancellable by any build; they hold no claim.
+- `GET /builds/{build_id}/executions`: the detached executions this build is
+  responsible for stopping, with the backend and ref to stop them by.
+- `FrontierTaskRef.latest_status_build_id`: who holds each task in the
+  frontier, so a scheduler can tell its own executions from a neighbour's.
+- `POST /builds/{id}/notify` flags only a RUNNING build, and reports
+  `needs_tick` accordingly.
+
 ## [0.23.0] — 2026-09-01
 
 ### SDK
