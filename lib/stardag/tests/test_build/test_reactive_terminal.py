@@ -888,6 +888,42 @@ class TestExternalBlockers:
             "not linger on a snapshot it has already invalidated"
         )
 
+    async def test_a_reset_that_fails_does_not_count_as_progress(
+        self, default_in_memory_fs_target: typing.Type[InMemoryFileTarget]
+    ):
+        """The counter is read as "the frontier changed, act again now".
+
+        So a reset that raised must not increment it. If it did, the tick
+        would loop straight back, re-read the same blocker, fail the same
+        reset and refresh its own linger deadline — spinning for as long as
+        the retry keeps failing, which one transient registry error is
+        enough to start.
+        """
+        _, registry, executor, store = self._blocked_build(
+            blocker_status="cancelled", in_build=True
+        )
+        registry.retry_by_id_error = RuntimeError("registry unavailable")
+
+        summary = await run_tick_aio(
+            uuid4(),
+            registry=registry,
+            task_executor=executor,
+            task_store=store,
+            config=TickConfig(
+                linger_seconds=0.2,
+                poll_interval_seconds=0.01,
+                fail_mode=FailMode.CONTINUE,
+            ),
+        )
+
+        assert summary.in_build_blockers_reset == 0
+        assert ("retry-failed", self.BLOCKER_ID) in registry.calls
+        # One pass, then the linger — not a spin.
+        assert summary.iterations == 1, (
+            "a failed reset sent the tick round the loop again: "
+            f"{summary.iterations} iterations"
+        )
+
     async def test_a_shared_cancelled_blocker_is_reset_once_per_task(
         self, default_in_memory_fs_target: typing.Type[InMemoryFileTarget]
     ):

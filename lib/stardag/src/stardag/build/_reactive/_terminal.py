@@ -21,7 +21,6 @@ from stardag.registry import (
 
 from stardag.build._reactive._budgets import _retry_allowed
 from stardag.build._reactive._frontier_actions import (
-    _CANCELLED_STATUS,
     _INTERRUPTED_STATUS,
     _RUNNING_STATUSES,
     _TERMINAL_BUILD_STATUSES,
@@ -567,16 +566,26 @@ async def _handle_terminal(
             reset_ids = list(
                 dict.fromkeys(v.blocker.blocking_task_id for v in blockers.recoverable)
             )
+            # Successes only, and the distinction is load-bearing rather
+            # than cosmetic: the caller reads this counter as "the frontier
+            # changed, act again immediately". Counting a reset that raised
+            # would send the tick round the loop to re-read the same
+            # blocker, fail the same reset and refresh its own linger
+            # deadline — a hot loop for as long as the retry keeps failing,
+            # which a transient registry error or an unsupported route is
+            # enough to produce.
+            reset = 0
             for task_id in reset_ids:
                 try:
                     await registry.task_retry_by_id_aio(build_id, task_id)
+                    reset += 1
                 except Exception as e:
                     # Best-effort: another tick may have reset it already, or
                     # completed it outright. Either way the next frontier read
                     # tells the truth, and failing the build over a lost race
                     # is the outcome this whole path exists to avoid.
                     logger.warning(f"Could not reset in-build blocker {task_id}: {e}")
-            summary.in_build_blockers_reset += len(reset_ids)
+            summary.in_build_blockers_reset += reset
             logger.info(
                 f"Build {build_id}: reset {len(reset_ids)} cancelled blocker(s) "
                 f"in this build's own plan so this build can run them: "
@@ -764,12 +773,17 @@ async def _cancel_running(
                 f"{item.executor_ref!r} for task {item.task_id}: {e}"
             )
             continue
-        if item.latest_status == _CANCELLED_STATUS:
-            # Already revoked — the build cancel's cascade wrote the event
-            # when it released the claim. A second one would say nothing new.
-            continue
         try:
-            await registry.task_cancel_aio(build_id, task)
+            # ``only_if_held``: the registry re-checks, on the locked row,
+            # that this build still holds the task in a status with an
+            # execution to revoke, and records nothing otherwise. Two things
+            # need that, and neither is visible from the listing. A task the
+            # cascade already cancelled needs no second event; and by now
+            # another build may have reset this one and be about to run it,
+            # where writing CANCELLED takes no claim but does stamp a
+            # neighbour's freshly scheduled task dead — the exact churn this
+            # whole pass exists to stop causing.
+            await registry.task_cancel_aio(build_id, task, only_if_held=True)
         except Exception as e:
             logger.warning(f"Failed to record cancellation of task {item.task_id}: {e}")
 

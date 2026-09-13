@@ -178,6 +178,9 @@ class FakeReactiveRegistry(NoOpRegistry):
         self.tick_summary_error: Exception | None = None
         # Set to make the frontier fetch blow up, i.e. crash the tick itself.
         self.frontier_error: Exception | None = None
+        # Set to make every id-based retry fail — a transient registry
+        # error, or a route an older server does not serve.
+        self.retry_by_id_error: Exception | None = None
         # Set False to emulate a server predating the executions route: the
         # tick falls back to filtering the frontier itself.
         self.serves_executions = True
@@ -442,6 +445,9 @@ class FakeReactiveRegistry(NoOpRegistry):
     async def task_retry_by_id_aio(self, build_id, task_id):
         """Id-based retry — what a tick uses for a blocker it cannot
         reconstruct (it has the id off the frontier, not the object)."""
+        if self.retry_by_id_error is not None:
+            self.calls.append(("retry-failed", task_id))
+            raise self.retry_by_id_error
         self.calls.append(("retry", task_id))
         self._count_event(task_id, kind="other")
         if self.statuses.get(task_id) in _RETRYABLE_STATUSES:
@@ -462,8 +468,15 @@ class FakeReactiveRegistry(NoOpRegistry):
         self.calls.append(("add_roots", ",".join(root_task_ids)))
         self.root_task_ids += [t for t in root_task_ids if t not in self.root_task_ids]
 
-    async def task_cancel_aio(self, build_id, task):
+    async def task_cancel_aio(self, build_id, task, *, only_if_held: bool = False):
         tid = str(task.id)
+        if only_if_held and self.statuses.get(tid) not in ("running", "interrupted"):
+            # The server's rule, on the locked row: nothing to revoke, so
+            # nothing is recorded. Modelled because the tick's cleanup pass
+            # relies on it to not stamp a task another build has since
+            # reset -- a no-op here, not an error.
+            self.calls.append(("cancel-skipped", tid))
+            return
         self.calls.append(("cancel", tid))
         self._count_event(tid, kind="other")
         self.statuses[tid] = "cancelled"

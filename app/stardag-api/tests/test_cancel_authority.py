@@ -235,6 +235,72 @@ async def test_a_takeover_does_not_hide_the_execution_from_its_owner(
 
 
 @pytest.mark.asyncio
+async def test_a_conditional_cancel_does_not_stamp_a_task_someone_reset(
+    client: AsyncClient,
+):
+    """An engine cleaning up after itself decides what to cancel from a
+    listing it read a moment ago. By the time it gets here another build may
+    have reset the task and be about to run it — and PENDING holds no claim,
+    so the ownership guard would let the write through. It takes nothing,
+    but it stamps a neighbour's freshly scheduled task dead and sends it
+    round the reset loop, which is the damage this endpoint exists to stop
+    causing."""
+    owner = await _new_build(client)
+    await _start(client, owner, "shared")
+    await client.post(f"/api/v1/builds/{owner}/cancel", params={"cascade": "true"})
+
+    taker = await _new_build(client)
+    await _reference(client, taker, "shared")
+    await client.post(f"/api/v1/builds/{taker}/tasks/shared/retry")
+    assert await _task_status(client, "shared") == "pending"
+
+    response = await client.post(
+        f"/api/v1/builds/{owner}/tasks/shared/cancel",
+        params={"only_if_held": "true"},
+    )
+    assert response.status_code == 200, response.text
+    assert await _task_status(client, "shared") == "pending", (
+        "the cancelled build stamped a task another build had already reset"
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_conditional_cancel_still_revokes_what_this_build_holds(
+    client: AsyncClient,
+):
+    """The narrowing must not cost the thing the record is for: a worker
+    killed by the backend cannot self-report, so without the event the task
+    dangles RUNNING and holds its claim and limit slots forever."""
+    build = await _new_build(client)
+    await _start(client, build, "mine")
+
+    response = await client.post(
+        f"/api/v1/builds/{build}/tasks/mine/cancel", params={"only_if_held": "true"}
+    )
+    assert response.status_code == 200, response.text
+    assert await _task_status(client, "mine") == "cancelled"
+
+
+@pytest.mark.asyncio
+async def test_a_conditional_cancel_of_an_already_cancelled_task_is_a_no_op(
+    client: AsyncClient,
+):
+    """The cascade already wrote that event. A second one says nothing new,
+    and the cleanup pass should not have to know which."""
+    build = await _new_build(client)
+    await _start(client, build, "revoked")
+    await client.post(f"/api/v1/builds/{build}/cancel", params={"cascade": "true"})
+
+    before = (await client.get("/api/v1/tasks/revoked")).json()["latest_status_at"]
+    response = await client.post(
+        f"/api/v1/builds/{build}/tasks/revoked/cancel", params={"only_if_held": "true"}
+    )
+    assert response.status_code == 200, response.text
+    after = (await client.get("/api/v1/tasks/revoked")).json()["latest_status_at"]
+    assert after == before, "a second cancel event was recorded"
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("outcome", ["complete", "fail", "suspend"])
 async def test_an_execution_a_worker_reported_over_is_not_listed(
     client: AsyncClient, outcome: str

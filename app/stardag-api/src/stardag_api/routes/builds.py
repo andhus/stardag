@@ -7,7 +7,7 @@ from typing import Annotated, Any, Mapping, Sequence, cast
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import delete, func, select, update
+from sqlalchemy import delete, func, select, tuple_, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -550,6 +550,7 @@ async def _create_task_event(
     extra_metadata: dict | None = None,
     limit_keys: list[str] | None = None,
     claim: bool = False,
+    only_if_held: bool = False,
 ) -> TaskEventResponse:
     """Create a task event and return slim response.
 
@@ -562,6 +563,10 @@ async def _create_task_event(
     the FOR-UPDATE-locked task row, and the raised HTTPException rolls back
     the whole transaction (no event, no limit-key rows, and any
     limit-row locks taken by the enforce_limits pre-check are released).
+
+    ``only_if_held`` (TASK_CANCELLED only): record nothing unless this build
+    still holds the task in a status that has an execution to revoke. See
+    :func:`cancel_task`.
     """
     # Limit checks
     _raise_if_limit_exceeded(check_rate_limit(auth.workspace_id, limits_settings))
@@ -618,6 +623,34 @@ async def _create_task_event(
             raise HTTPException(
                 status_code=409,
                 detail={"error_code": "task_already_completed"},
+            )
+
+    if event_type == EventType.TASK_CANCELLED and only_if_held:
+        # Evaluated on the FOR-UPDATE-locked row, which is the whole point:
+        # a cleanup pass decides what to cancel from a listing it read a
+        # moment ago, and in that moment another build can have reset the
+        # task to PENDING and be about to run it. Writing CANCELLED then
+        # would take no claim — PENDING holds none — but it would still
+        # stamp a neighbour's freshly scheduled task dead and send it round
+        # the reset loop again, which is the class of damage the caller is
+        # cleaning up after.
+        #
+        # A no-op rather than a 409: the caller is doing best-effort
+        # cleanup over a list, and "somebody else moved it on" is a normal
+        # outcome, not an error to log per task.
+        held = (
+            db_task.latest_status in (TaskStatus.RUNNING, TaskStatus.INTERRUPTED)
+            and db_task.latest_status_build_id == build_id
+        )
+        if not held:
+            status, _, _, _, attempt_count = await get_task_status_in_build(
+                db, build_id, db_task.id
+            )
+            return TaskEventResponse(
+                task_id=db_task.task_id,
+                status=status,
+                latest_status=db_task.latest_status,
+                attempt_count=attempt_count,
             )
 
     if event_type == EventType.TASK_CANCELLED and not may_revoke(db_task, build_id):
@@ -2403,8 +2436,16 @@ async def get_build_executions(
             Event.created_at.label("started_at"),
             ref_column.label("executor_ref"),
             executor_column.label("executor"),
+            Event.id.label("event_id"),
+            # id (UUID7) breaks created_at ties, the same way the status
+            # replay does — without it two same-timestamp starts order by
+            # whatever the index returned, and "the latest ref" becomes a
+            # coin toss between two executions.
             func.row_number()
-            .over(partition_by=Event.task_id, order_by=Event.created_at.desc())
+            .over(
+                partition_by=Event.task_id,
+                order_by=(Event.created_at.desc(), Event.id.desc()),
+            )
             .label("rank"),
         )
         .where(
@@ -2424,7 +2465,11 @@ async def get_build_executions(
             Event.build_id == build_id,
             Event.task_id == latest.c.task_pk,
             Event.event_type.in_(_EXECUTION_ENDED_EVENTS),
-            Event.created_at > latest.c.started_at,
+            # Same tie-break, for the same reason: an end recorded in the
+            # same microsecond as the start it ends would otherwise be
+            # missed, and the execution reported as still to stop.
+            tuple_(Event.created_at, Event.id)
+            > tuple_(latest.c.started_at, latest.c.event_id),
         )
         .exists()
     )
@@ -3651,6 +3696,21 @@ async def cancel_task(
     db: Annotated[AsyncSession, Depends(get_db)],
     auth: Annotated[SdkAuth, Depends(require_sdk_auth)],
     commit_hash: str | None = None,
+    only_if_held: Annotated[
+        bool,
+        Query(
+            description=(
+                "Record nothing unless this build still holds the task in "
+                "RUNNING or INTERRUPTED — the statuses that have a live "
+                "execution to revoke. For an engine cleaning up after "
+                "itself from a list it read a moment ago: by the time it "
+                "gets here another build may have reset the task and be "
+                "about to run it. Answers 200 with the unchanged status "
+                "rather than an error, since that is a normal outcome of "
+                "the race rather than a fault."
+            ),
+        ),
+    ] = False,
 ):
     """Cancel a task, releasing its execution claim and limit slots.
 
@@ -3669,7 +3729,13 @@ async def cancel_task(
     is a build declaring somebody else's live worker dead.
     """
     return await _create_task_event(
-        build_id, task_id, EventType.TASK_CANCELLED, db, auth, commit_hash=commit_hash
+        build_id,
+        task_id,
+        EventType.TASK_CANCELLED,
+        db,
+        auth,
+        commit_hash=commit_hash,
+        only_if_held=only_if_held,
     )
 
 
