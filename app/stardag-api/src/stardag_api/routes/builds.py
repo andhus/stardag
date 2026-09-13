@@ -2606,25 +2606,45 @@ def _parse_executions_cursor(cursor: str | None) -> tuple[datetime, UUID] | None
 # --- Tasks within Builds ---
 
 
-def _not_abandoned_dynamic_edge(downstream: Any) -> ColumnElement[bool]:
-    """Dynamic edges of a CANCELLED upstream do not admit anything.
+def _not_abandoned_dynamic_edge(downstream: Any, owner: Any) -> ColumnElement[bool]:
+    """Dynamic edges of an abandoned attempt do not admit anything.
 
-    The one shape plan closure must not follow. A cancelled task is what a
-    tick resets — the revocation-is-not-a-result rule — and resetting it
-    retracts the dynamic dependencies its abandoned attempt yielded. So the
-    tasks on the far side of those edges are a generation nobody is going to
-    ask for again, and admitting them puts them in the plan where the build
-    will find them PENDING, actionable, and run them. Measured, not
-    theorised: a cancelled build's fan-out was re-run in full by the next
-    build, because its children never reached RUNNING before the cancel and
-    so were never cancelled with it.
+    The shape plan closure must not follow, because following it is not
+    over-approximation but wasted execution. The tasks on the far side are
+    a generation nobody is going to ask for again — the attempt that
+    yielded them is over, and the reset that revives the task retracts them
+    (``services.dependencies``). Admitting them puts them in the plan,
+    where the build finds them PENDING, actionable, and runs them.
+    Measured, not theorised: a cancelled build's fan-out was re-run in full
+    by the next build, because its children never reached RUNNING before
+    the cancel and so were never cancelled with it.
 
-    Static edges are unaffected: a cancelled upstream a build statically
-    requires is still a dependency it has to satisfy, and resetting it is
-    how it does that.
+    Two statuses say the attempt is over, and they need different evidence:
+
+    * **CANCELLED** on its own. Nobody is progressing a cancelled task, and
+      a tick's remedy for one in its plan is to reset it.
+    * **SUSPENDED with no live owner.** A suspension is the one state where
+      the task is legitimately mid-flight — its children *are* being
+      progressed, by the build that yielded them — which is exactly the
+      case this closure was written for (scenario S2), so it must keep
+      admitting them while that build is alive. Once the owner is gone the
+      suspension is abandoned like any other attempt, and the next build's
+      trigger resets it before its first tick.
+
+    Every other status keeps today's over-approximation. RUNNING is being
+    executed; FAILED and SKIPPED are results a tick will not reset, so a
+    build gated behind one should see it named rather than silently
+    ungated; PENDING covers edges recorded before retraction existed, which
+    nothing will ever retract.
+
+    Static edges are unaffected throughout: an abandoned upstream a build
+    statically requires is still a dependency it has to satisfy, and
+    resetting it is how it does that.
     """
+    owner_is_live = owner.latest_status == BuildStatus.RUNNING
     return (TaskDependency.is_dynamic.is_(False)) | (
-        downstream.latest_status != TaskStatus.CANCELLED
+        (downstream.latest_status != TaskStatus.CANCELLED)
+        & ((downstream.latest_status != TaskStatus.SUSPENDED) | owner_is_live)
     )
 
 
@@ -2694,6 +2714,12 @@ async def _close_plan_over_dependencies(
     # rule about abandoned generations — which is about the task that
     # yielded them — needs its own handle on the other side of the edge.
     downstream = aliased(Task)
+    # ...and the build that put the downstream task where it is, which is
+    # the only evidence that a suspension is still being progressed rather
+    # than abandoned. Outer-joined: a task with no recorded status build —
+    # a pre-denormalisation row, or one whose build was deleted — has no
+    # owner to be alive, which reads as "abandoned" and is right.
+    downstream_owner = aliased(Build)
     while frontier_pks:
         in_plan = (
             select(Event.task_id)
@@ -2709,6 +2735,10 @@ async def _close_plan_over_dependencies(
                     .join(
                         downstream,
                         downstream.id == TaskDependency.downstream_task_id,
+                    )
+                    .outerjoin(
+                        downstream_owner,
+                        downstream_owner.id == downstream.latest_status_build_id,
                     )
                     .where(
                         TaskDependency.downstream_task_id.in_(frontier_pks),
@@ -2738,7 +2768,7 @@ async def _close_plan_over_dependencies(
                         # and say so; and PENDING covers edges recorded
                         # before retraction existed, which nothing will
                         # retract.
-                        _not_abandoned_dynamic_edge(downstream),
+                        _not_abandoned_dynamic_edge(downstream, downstream_owner),
                     )
                     .distinct()
                 )
@@ -2909,10 +2939,35 @@ async def _reconcile_dependency_edges(
         )
 
     # 3. Bulk insert the edge rows.
-    edge_stmt = (
-        pg_insert(TaskDependency)
-        .values(edge_rows)
-        .on_conflict_do_nothing(constraint="uq_task_dependency_edge")
+    #
+    # DO UPDATE rather than DO NOTHING, for two reasons that both end in
+    # a task running before an upstream it needs:
+    #
+    # * **A re-asserted edge must come back.** Retraction supersedes an
+    #   abandoned attempt's dynamic edges (``services.dependencies``), and
+    #   the next attempt usually yields the very same children. Left
+    #   superseded, they would no longer gate — so the parent would be
+    #   scheduled the moment it was reset, re-yield the same incomplete
+    #   batch, suspend, and go round again, never gated on the work it is
+    #   waiting for.
+    # * **A static declaration outranks an earlier dynamic observation.**
+    #   ``is_dynamic`` used to keep the first observation and was read by
+    #   nothing but the DAG view; it now decides what retraction may touch.
+    #   An edge first seen as a yield and later declared in ``requires()``
+    #   would otherwise stay marked dynamic and be retracted out from under
+    #   the build that statically requires it.
+    #
+    # A dynamic write never flips the flag the other way: it is the weaker
+    # claim of the two, and an edge that is genuinely both is static.
+    edge_stmt = pg_insert(TaskDependency).values(edge_rows)
+    revive: dict[str, object] = {"superseded_at": None}
+    if not is_dynamic:
+        revive["is_dynamic"] = False
+    edge_stmt = edge_stmt.on_conflict_do_update(
+        constraint="uq_task_dependency_edge",
+        set_=revive,
+        where=(TaskDependency.superseded_at.is_not(None))
+        | (TaskDependency.is_dynamic.is_(True) if not is_dynamic else false()),
     )
     result = await db.execute(edge_stmt)
     # CursorResult.rowcount totals across all VALUES rows on Postgres
@@ -3367,10 +3422,21 @@ async def register_tasks_bulk(
                 }
             )
     if edge_rows:
+        # Same upsert as ``_reconcile_dependency_edges``, and for the same
+        # two reasons — see the comment there. These are all static edges,
+        # so a conflicting row is revived if it was superseded and demoted
+        # to static if it was first seen as a yield: a declaration outranks
+        # an observation, and retraction must not reach an edge the build's
+        # own ``requires()`` names.
         await db.execute(
             pg_insert(TaskDependency)
             .values(edge_rows)
-            .on_conflict_do_nothing(constraint="uq_task_dependency_edge")
+            .on_conflict_do_update(
+                constraint="uq_task_dependency_edge",
+                set_={"superseded_at": None, "is_dynamic": False},
+                where=(TaskDependency.superseded_at.is_not(None))
+                | (TaskDependency.is_dynamic.is_(True)),
+            )
         )
 
     # Phase 3: bulk-insert events with explicit per-event timestamps so
@@ -3784,7 +3850,9 @@ async def add_task_dependencies(
     of a given edge sets ``is_dynamic``; subsequent writes do not overwrite.
 
     Returns:
-        ``{"added": <new edges>, "total": <upstream_task_ids length>}``.
+        ``{"added": <edges that became current>, "total": <upstream_task_ids
+        length>}`` — an edge revived from superseded counts, since from a
+        scheduling point of view it is as new as one inserted.
     """
     _raise_if_limit_exceeded(check_rate_limit(auth.workspace_id, limits_settings))
     _raise_if_limit_exceeded(

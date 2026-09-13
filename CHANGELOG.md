@@ -70,6 +70,12 @@ For detailed SDK migration guides, see [RELEASE_NOTES.md](RELEASE_NOTES.md).
   ordinary multi-round walk and retracts nothing. Static edges are untouched:
   they are declared at every registration, and nothing about an execution
   withdraws one.
+  Re-asserting an edge revives it: retraction and the next attempt yielding
+  the same children is the _common_ case, and a superseded edge that could
+  not come back would leave the parent ungated from work it is waiting for.
+  A static declaration also outranks an earlier dynamic observation now —
+  `is_dynamic` decides what retraction may touch, so it has to mean "nothing
+  has declared this".
 - Gating, plan closure, `skip-blocked` and `blocked_by_external` ignore
   retracted edges. The DAG view does not — that attempt really did need
   those tasks, and the graph is history.

@@ -308,6 +308,112 @@ async def test_a_cancelled_parents_generation_is_not_admitted_either(
 
 
 @pytest.mark.asyncio
+async def test_a_re_yielded_child_gates_again(
+    client: AsyncClient, async_session: AsyncSession
+):
+    """The dangerous half of retraction, if the edge could not come back.
+
+    The next attempt of a parent usually yields the very same children —
+    the fan-out changing is the interesting case, not the common one. Left
+    superseded, those edges would no longer gate: the parent would be
+    schedulable the instant it was reset, re-yield the same incomplete
+    batch, suspend, and go round again, never once waiting for the work it
+    is waiting for.
+    """
+    build = await _new_build(client)
+    await client.post(f"/api/v1/builds/{build}/tasks", json=_register("parent"))
+    await _start(client, build, "parent")
+    await _yield_children(client, build, "parent", ["child"])
+    await client.post(f"/api/v1/builds/{build}/tasks/parent/retry")
+    async_session.expire_all()
+    assert await _edges(async_session, "parent") == {"child": False}
+
+    # The new attempt yields the same child.
+    await _start(client, build, "parent")
+    await _yield_children(client, build, "parent", ["child"])
+
+    async_session.expire_all()
+    assert await _edges(async_session, "parent") == {"child": True}
+    assert "parent" not in await _actionable(client, build), (
+        "the parent must be gated on the child it just asked for again"
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_statically_declared_edge_outranks_an_earlier_yield(
+    client: AsyncClient, async_session: AsyncSession
+):
+    """``is_dynamic`` decides what retraction may touch, so it has to mean
+    "nothing has declared this". It kept the first observation, which was
+    harmless while only the DAG view read it: an edge first yielded and
+    later named in ``requires()`` would stay marked dynamic and be retracted
+    out from under the build that statically requires it."""
+    build = await _new_build(client)
+    await client.post(f"/api/v1/builds/{build}/tasks", json=_register("upstream"))
+    await client.post(f"/api/v1/builds/{build}/tasks", json=_register("child"))
+    await _start(client, build, "child")
+    await _yield_children(client, build, "child", ["upstream"])
+
+    # A later registration declares the same upstream statically.
+    await client.post(
+        f"/api/v1/builds/{build}/tasks", json=_register("child", ["upstream"])
+    )
+    await client.post(f"/api/v1/builds/{build}/tasks/child/retry")
+
+    async_session.expire_all()
+    assert await _edges(async_session, "child") == {"upstream": True}
+
+
+@pytest.mark.asyncio
+async def test_an_abandoned_suspension_admits_nothing_either(client: AsyncClient):
+    """The same trap one status over. A suspension is the one state where a
+    task is legitimately mid-flight, so closure keeps admitting its children
+    while the owning build is alive — that is scenario S2, and the case this
+    closure was written for. Once the owner is gone it is an abandoned
+    attempt like any other, and the next build's trigger resets it."""
+    first = await _new_build(client)
+    await client.post(f"/api/v1/builds/{first}/tasks", json=_register("parent"))
+    await _start(client, first, "parent")
+    await _yield_children(client, first, "parent", ["kid"])
+    # Terminal *without* a cascade, so the parent is left SUSPENDED.
+    await client.post(f"/api/v1/builds/{first}/fail")
+
+    later = await _new_build(client)
+    await client.post(
+        f"/api/v1/builds/{later}/tasks", json=_register("root", ["parent"])
+    )
+
+    counts = (await client.get(f"/api/v1/builds/{later}/frontier")).json()[
+        "status_counts"
+    ]
+    assert sorted(counts.items()) == [("pending", 1), ("suspended", 1)], counts
+
+
+@pytest.mark.asyncio
+async def test_a_live_owners_suspension_still_admits_its_children(
+    client: AsyncClient,
+):
+    """The half that must not change. The children of a suspension a live
+    build is progressing have to enter the waiting build's plan, or it is
+    gated on tasks it cannot schedule and nothing can clear — the permanent
+    deadlock plan closure exists to prevent."""
+    owner = await _new_build(client)
+    await client.post(f"/api/v1/builds/{owner}/tasks", json=_register("parent"))
+    await _start(client, owner, "parent")
+    await _yield_children(client, owner, "parent", ["kid"])
+
+    later = await _new_build(client)
+    await client.post(
+        f"/api/v1/builds/{later}/tasks", json=_register("root", ["parent"])
+    )
+
+    counts = (await client.get(f"/api/v1/builds/{later}/frontier")).json()[
+        "status_counts"
+    ]
+    assert sorted(counts.items()) == [("pending", 2), ("suspended", 1)], counts
+
+
+@pytest.mark.asyncio
 async def test_a_retracted_edge_does_not_propagate_a_failure(client: AsyncClient):
     """``skip-blocked`` walks down the edges from a failed task. A child of
     an abandoned attempt failing says nothing about a parent that is no
