@@ -55,6 +55,38 @@ For detailed SDK migration guides, see [RELEASE_NOTES.md](RELEASE_NOTES.md).
 
 ### Registry API
 
+- **An abandoned execution attempt no longer drags its dynamic dependencies
+  behind it.** Dynamic edges are written `ON CONFLICT DO NOTHING`, so a
+  task's set only ever grew across attempts — invisible while a generation
+  completes, since completed upstreams do not gate, and expensive the moment
+  one is abandoned part-way: the incomplete children then gate _their own
+  parent_ forever, so the next build that wanted the parent had to reset and
+  re-run a whole generation of work the task was no longer going to ask for.
+  A transition that begins a new attempt — a reset to `PENDING`, or a start
+  of a `SUSPENDED` task by a build that does not hold it — now retracts the
+  previous attempt's dynamic edges (`task_dependencies.superseded_at`, one
+  additive migration; existing rows read as current, so the upgrade changes
+  no scheduling decision). A build resuming its own suspension is the
+  ordinary multi-round walk and retracts nothing. Static edges are untouched:
+  they are declared at every registration, and nothing about an execution
+  withdraws one.
+  Re-asserting an edge revives it: retraction and the next attempt yielding
+  the same children is the _common_ case, and a superseded edge that could
+  not come back would leave the parent ungated from work it is waiting for.
+  A static declaration also outranks an earlier dynamic observation now —
+  `is_dynamic` decides what retraction may touch, so it has to mean "nothing
+  has declared this".
+  Plan closure stops following the dynamic edges of a task a trigger will
+  reset — the whole retryable set, not only cancelled ones — because
+  registration closes the plan _before_ `retry_failed` resets anything, so a
+  stale generation would already be in the plan and actionable by the time
+  its edges were retracted. The exception is a suspension under a live
+  owner: there the children really are being progressed, and a build that
+  did not inherit them would deadlock.
+- Gating, plan closure, `skip-blocked` and `blocked_by_external` ignore
+  retracted edges. The DAG view does not — that attempt really did need
+  those tasks, and the graph is history.
+
 - `POST /builds/{build}/tasks/{task}/cancel` refuses with 409
   `not_claim_holder` when the task is RUNNING, SUSPENDED or INTERRUPTED
   under a different build. Authority to revoke is build-scoped — the

@@ -14,6 +14,8 @@ from __future__ import annotations
 import ast
 import pathlib
 
+import pytest
+
 SRC = pathlib.Path(__file__).resolve().parents[1] / "src" / "stardag_api"
 
 # The module that owns the transition. Everything else must go through it.
@@ -75,25 +77,28 @@ def test_nothing_outside_status_applies_an_event_to_a_task() -> None:
     )
 
 
-def test_the_wake_up_hook_has_exactly_one_call_site() -> None:
-    """``flag_after_task_transition`` is called from ``transition_task``.
+# Every post-transition hook, by the name it is called under. Each reads
+# the status as it was *before* the apply, so each can only be correct from
+# inside ``transition_task`` — a second call site means either a path that
+# transitions a task without the helper (the shape the helper exists to
+# prevent) or the hook running twice for one transition.
+_POST_TRANSITION_HOOKS = (
+    "flag_after_task_transition",
+    "retract_dynamic_edges_if_new_attempt",
+)
 
-    A second call site means a path that transitions a task without going
-    through the helper — the shape the helper exists to prevent — or a
-    double flag.
-    """
+
+@pytest.mark.parametrize("hook", _POST_TRANSITION_HOOKS)
+def test_each_post_transition_hook_has_exactly_one_call_site(hook: str) -> None:
     call_sites: list[str] = []
     for path in [*_python_files(), _OWNER]:
         tree = ast.parse(path.read_text(), filename=str(path))
         for node in ast.walk(tree):
-            if (
-                isinstance(node, ast.Call)
-                and _called_name(node) == "flag_after_task_transition"
-            ):
+            if isinstance(node, ast.Call) and _called_name(node) == hook:
                 call_sites.append(f"{path.relative_to(SRC)}:{node.lineno}")
 
     assert len(call_sites) == 1, (
-        "expected exactly one caller of flag_after_task_transition "
+        f"expected exactly one caller of {hook} "
         f"(services/status.py's transition_task), found: {call_sites}"
     )
     assert call_sites[0].startswith("services/status.py"), call_sites

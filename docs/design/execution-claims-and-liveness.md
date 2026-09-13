@@ -102,6 +102,45 @@ may run the task next; the ref names one execution, and the build that
 started it owns it however the claim has moved since. That is what makes
 cancelling it safe: it cannot reach anybody else's container.
 
+### An edge is evidence, and evidence can be withdrawn
+
+Plan closure follows every recorded dependency edge, which is what keeps a
+build from being gated by something outside its plan. What it could not do
+was notice that an edge had stopped describing how the task is built.
+
+The two kinds of edge go stale for different reasons, because they are
+asserted by different acts. A **static** edge is _declared_: every build
+that registers the task re-states its whole `requires()` set, from code. A
+**dynamic** edge is _discovered_: one execution attempt of the downstream
+task yielded this upstream and suspended. So for a dynamic edge the
+question "is this still current?" has an exact answer — is the attempt that
+produced it still the one in progress?
+
+Two transitions say it is not, and both retract the task's dynamic edges:
+a reset to `PENDING`, and a start of a `SUSPENDED` task by a build that
+does not hold it. A build resuming its _own_ suspension is the ordinary
+multi-round walk and retracts nothing.
+
+Reset has to be the trigger rather than the start that follows it, because
+the stale children gate the task itself: it cannot reach a start while they
+are recorded. And the whole generation goes, completed children included —
+a set half from one attempt and half from another is a state no later rule
+can reason about, and nothing is lost, since a completed child's target
+still exists and its edge returns with the next yield.
+
+The symptom this ends: edges are written `ON CONFLICT DO NOTHING`, so a
+task's set only ever grew across attempts. Invisible while a generation
+completes, because completed upstreams do not gate — and expensive the
+moment one is abandoned part-way, since the incomplete children then gate
+_their own parent_ forever and the next build has to run them all to
+un-gate it.
+
+Note this is not the static-edge problem, which is a different shape: two
+live builds can declare different static upstreams for one task id, because
+`U1` and `U2` are different tasks with no claim between them. Dynamic
+divergence cannot happen concurrently — one task, one claim, one executing
+build at a time — so it needs retraction, not arbitration.
+
 ### Revocation is not a result
 
 "Acts on everything in its plan" is not "resets everything in its plan". A

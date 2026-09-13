@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from stardag_api.models import Build, BuildStatus, Event, EventType, Task, TaskStatus
 from stardag_api.services.claims import claim_expires_at
+from stardag_api.services.dependencies import retract_dynamic_edges_if_new_attempt
 from stardag_api.services.wakeups import flag_after_task_transition
 
 # Statuses TASK_RETRIED resets to PENDING. Shared by the denormalised path
@@ -387,6 +388,7 @@ async def transition_task(
         # say so.
         await db.flush()
     previous_status = task.latest_status
+    previous_status_build_id = task.latest_status_build_id
     _apply_event_to_task(task, event)
     # Cross-build wake-up (see services.wakeups): a status change is news
     # for every *other* live reactive build holding this task, which has
@@ -395,6 +397,18 @@ async def transition_task(
     # is status-neutral by design — flags nobody and costs no query.
     await flag_after_task_transition(
         db, task, previous_status=previous_status, build_id=event.build_id
+    )
+    # Retraction (see services.dependencies): a transition that begins a
+    # *new attempt* abandons whatever dynamic dependencies the previous one
+    # yielded. Both hooks read the pre-apply status, which is why they live
+    # here rather than in their callers — and why this one also needs the
+    # previous owner, which the apply has already overwritten by now.
+    await retract_dynamic_edges_if_new_attempt(
+        db,
+        task,
+        previous_status=previous_status,
+        previous_status_build_id=previous_status_build_id,
+        event=event,
     )
 
 

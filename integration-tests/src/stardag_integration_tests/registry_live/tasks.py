@@ -148,6 +148,59 @@ class SuspendingParent(sd.Task[list[int]]):
         self._save([len(kid.load()) for kid in kids])
 
 
+# Modal Dict holding the fan-out each ``GenerationalParent`` should yield,
+# keyed by that scenario's salt. Created on first use and read inside the
+# worker, which is the point: it is the one input a scenario can change
+# *between* two builds of the same task id.
+FANOUT_DICT_NAME = "registry-live-fanout"
+
+
+class GenerationalParent(sd.Task[list[int]]):
+    """Yields whichever dynamic children the scenario currently asks for.
+
+    Written for the one shape a fixed parameter cannot express: the same
+    task id yielding a *different* generation of children on a later
+    attempt. That is what an abandoned fan-out looks like once the code has
+    moved on -- the partition size changed, the task still promises the
+    same output, so its id is unchanged and correctly so.
+
+    The generation comes from a Modal Dict rather than from a parameter
+    because a parameter cannot carry it. A hashed one changes the task id,
+    which makes the two attempts two different tasks and the scenario
+    imaginary. A ``hash_exclude=True`` one does not -- but the registry
+    stores a task's ``task_data`` at first registration and never updates
+    it, and this app declares ``require_pickle_free``, so every later build
+    rehydrates from that first copy: the second phase would silently run at
+    the first phase's width and the scenario would pass having tested
+    nothing.
+
+    Children are distinguished by their ``seconds``, which is a real
+    parameter of ``slow``, so each generation is a genuinely different set
+    of task ids -- as two partitionings of the same data are.
+    """
+
+    salt: str
+    pre_yield_seconds: int = 10
+
+    def requires(self):
+        return get_range(limit=1, salt=self.salt)
+
+    def run(self):
+        import time
+
+        import modal
+
+        # A RUNNING window before the yield, so a scenario can catch this
+        # task in flight if it needs to.
+        time.sleep(self.pre_yield_seconds)
+        generation = modal.Dict.from_name(FANOUT_DICT_NAME, create_if_missing=True)[
+            self.salt
+        ]
+        kids = [slow(values=self.requires(), seconds=seconds) for seconds in generation]
+        yield kids
+        self._save([len(kid.load()) for kid in kids])
+
+
 class FanIn(sd.Task[int]):
     """A single root over ``width`` independent leaves: one wide layer.
 
