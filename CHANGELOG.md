@@ -27,6 +27,17 @@ For detailed SDK migration guides, see [RELEASE_NOTES.md](RELEASE_NOTES.md).
   The claim was released and the container kept running, and the next
   claimant started a second execution of the same task. The executions
   route reports them, so the one tick a cancel asks for now stops them.
+- **A tick that resets a blocked upstream now runs it, instead of lingering
+  for a wake-up it never sent.** Resetting a cancelled blocker is the one
+  thing terminal handling does that changes the frontier, and the pass
+  treated it as no action at all: it fell through to the linger poll, which
+  waits on the registry's wake-up flag — and that flag deliberately skips
+  the build whose own event caused the change, since it is the one that
+  already knows. So the tick waited for news it had already heard, exited on
+  its deadline, and left the build with nothing running, nothing scheduled
+  and no flag to be handed out on, until the watchdog. Reachable whenever a
+  shared task is genuinely left cancelled, which is exactly what the cancel
+  fixes above make the common outcome.
 - **A worker no longer spawns a tick for a build that cannot use one.** A
   cancelled build's workers keep running until a tick stops them, and each
   one re-flagged the build on its way out, so every drain in the

@@ -828,11 +828,65 @@ class TestExternalBlockers:
             ),
         )
 
-        # Reset, not failed: the next tick finds it actionable.
+        # Reset, not failed; see ``test_a_reset_blocker_runs_in_the_same_tick``
+        # for the follow-through.
         assert summary.terminal_status is None
         assert ("retry", self.BLOCKER_ID) in registry.calls
         assert registry.statuses[self.BLOCKER_ID] == "pending"
         assert registry.build_error_message is None
+
+    async def test_a_reset_blocker_runs_in_the_same_tick(
+        self, default_in_memory_fs_target: typing.Type[InMemoryFileTarget]
+    ):
+        """Resetting a blocker must not end the pass.
+
+        There is no later tick to pick it up. The registry's wake-up flag
+        deliberately skips the build whose own event caused a change — it is
+        the one that already knows — so a tick that reset a blocker and then
+        lingered would be waiting for news it had already heard, exit on its
+        deadline, and leave the build with nothing running, nothing
+        scheduled, and no flag to be handed out on. Until the watchdog, if
+        one is even deployed.
+
+        Not a theoretical path. It is what a build does whenever a shared
+        task is genuinely left CANCELLED — which only became the common
+        outcome once cancelling a build started stopping its containers
+        instead of letting them run on and complete the task anyway.
+
+        This fixture uses a *real* blocking task, unlike the classification
+        tests above: the point here is that the tick goes on to run it.
+        """
+        blocker, root = _chain("reset-blocker", "reset-blocked-root")
+        registry, executor, store = _setup([blocker, root], auto_complete=False)
+        registry.add_blocking_task(
+            str(blocker.id),
+            blocks={str(root.id)},
+            status="cancelled",
+            in_build=True,
+            attempt_count=0,
+        )
+
+        summary = await run_tick_aio(
+            uuid4(),
+            registry=registry,
+            task_executor=executor,
+            task_store=store,
+            config=TickConfig(
+                linger_seconds=0.2,
+                poll_interval_seconds=0.01,
+                fail_mode=FailMode.CONTINUE,
+            ),
+        )
+
+        assert summary.in_build_blockers_reset == 1
+        assert executor.spawned == [blocker.id], (
+            "the reset blocker must be spawned by the pass that reset it: "
+            f"{executor.spawned}"
+        )
+        assert summary.iterations >= 2, (
+            "the tick must re-read the frontier after resetting a blocker, "
+            "not linger on a snapshot it has already invalidated"
+        )
 
     async def test_a_shared_cancelled_blocker_is_reset_once_per_task(
         self, default_in_memory_fs_target: typing.Type[InMemoryFileTarget]
