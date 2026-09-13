@@ -129,13 +129,18 @@ def test_a_cancelled_build_stops_its_own_executions_and_no_others() -> None:
         reactive=True,
         tick_kwargs={"linger_seconds": B_LINGER_SECONDS, "poll_interval_seconds": 3},
     ).build_id
-    wait_for_task_status(
-        shared.id,
-        expected="running",
+    # Wait for the *owner* to be B, not merely for the task to be RUNNING.
+    # A's own worker is still starting up around now and self-reports a
+    # TASK_STARTED of its own, which can land after the cascade and put the
+    # task back to RUNNING under A -- a real behaviour (the server cannot
+    # stop anything, so a live worker keeps talking), and one that makes a
+    # status-only wait return on the wrong build's execution under load.
+    wait_until(
+        lambda: task_status(shared.id) == "running" and _owner(shared_id) == build_b,
         build_id=build_b,
         timeout=STATUS_TIMEOUT_SECONDS,
+        what=f"build {build_b} to claim the shared task",
     )
-    assert _owner(shared_id) == build_b, describe(build_b)
 
     # Tick A again, while B's copy is running. In production this arrived
     # on its own -- a neighbour's drain hands a flagged build out, and A's
@@ -172,14 +177,19 @@ def test_a_cancelled_build_stops_its_own_executions_and_no_others() -> None:
         f"--- build B ---\n{describe(build_b)}"
     )
 
-    # The other half: A's own container really was stopped. Both sleep the
-    # same duration and A's started first, so a surviving A would have
-    # completed the task before B's copy and taken the row (COMPLETED is
-    # sticky). B owning the completion is the evidence that it did not.
-    assert _owner(shared_id) == build_b, (
-        "The shared task was completed by the cancelled build, so its "
-        "container outlived the cancel and ran to the end -- alongside the "
-        "copy B was running at the same time.\n"
-        f"--- build A (cancelled) ---\n{describe(build_a)}\n"
-        f"--- build B ---\n{describe(build_b)}"
+    # The other half: A stopped a container of its own. Before the executions
+    # route existed there was nothing for it to stop -- its cascaded task was
+    # CANCELLED, so in neither `running` nor `actionable` -- and the claim
+    # was released while the container ran on.
+    #
+    # Asserted on A's own trail rather than on who completed the task. Both
+    # containers sleep the same duration, so if A's survives, both complete
+    # and the row records whichever reported last: an answer that depends on
+    # a race is not evidence either way.
+    stopped = sum(s.get("cancelled_refs", 0) for s in tick_summaries(build_a))
+    assert stopped >= 1, (
+        "The cancelled build stopped no executions at all, so the cascade "
+        "released its claims and left its containers running -- which is "
+        "how two builds came to execute one task.\n"
+        f"--- build A (cancelled) ---\n{describe(build_a)}"
     )
