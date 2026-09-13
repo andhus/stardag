@@ -550,7 +550,7 @@ async def _create_task_event(
     extra_metadata: dict | None = None,
     limit_keys: list[str] | None = None,
     claim: bool = False,
-    only_if_held: bool = False,
+    if_executor_ref: str | None = None,
 ) -> TaskEventResponse:
     """Create a task event and return slim response.
 
@@ -564,9 +564,9 @@ async def _create_task_event(
     the whole transaction (no event, no limit-key rows, and any
     limit-row locks taken by the enforce_limits pre-check are released).
 
-    ``only_if_held`` (TASK_CANCELLED only): record nothing unless this build
-    still holds the task in a status that has an execution to revoke. See
-    :func:`cancel_task`.
+    ``if_executor_ref`` (TASK_CANCELLED only): record nothing unless this
+    build still holds the task, in a status with an execution to revoke,
+    under *that* execution. See :func:`cancel_task`.
     """
     # Limit checks
     _raise_if_limit_exceeded(check_rate_limit(auth.workspace_id, limits_settings))
@@ -625,22 +625,32 @@ async def _create_task_event(
                 detail={"error_code": "task_already_completed"},
             )
 
-    if event_type == EventType.TASK_CANCELLED and only_if_held:
+    if event_type == EventType.TASK_CANCELLED and if_executor_ref is not None:
         # Evaluated on the FOR-UPDATE-locked row, which is the whole point:
         # a cleanup pass decides what to cancel from a listing it read a
-        # moment ago, and in that moment another build can have reset the
-        # task to PENDING and be about to run it. Writing CANCELLED then
-        # would take no claim — PENDING holds none — but it would still
-        # stamp a neighbour's freshly scheduled task dead and send it round
-        # the reset loop again, which is the class of damage the caller is
-        # cleaning up after.
+        # moment ago, and the row can have moved since in two ways that both
+        # end badly.
+        #
+        # Another build can have reset the task to PENDING and be about to
+        # run it. Writing CANCELLED then takes no claim — PENDING holds none
+        # — but it stamps a neighbour's freshly scheduled task dead and
+        # sends it round the reset loop, which is the class of damage the
+        # caller is cleaning up after.
+        #
+        # Or *this* build can have started the task again under a new ref:
+        # a retry it spawned, or a worker of the old attempt self-reporting
+        # late. Then status and owner still say "held by me", and recording
+        # the cancel would revoke the claim of an execution nobody stopped —
+        # so the identity of the execution has to be part of the condition,
+        # not just who holds the task.
         #
         # A no-op rather than a 409: the caller is doing best-effort
-        # cleanup over a list, and "somebody else moved it on" is a normal
-        # outcome, not an error to log per task.
+        # cleanup over a list, and "it moved on" is a normal outcome, not an
+        # error to log per task.
         held = (
             db_task.latest_status in (TaskStatus.RUNNING, TaskStatus.INTERRUPTED)
             and db_task.latest_status_build_id == build_id
+            and db_task.latest_executor_ref == if_executor_ref
         )
         if not held:
             status, _, _, _, attempt_count = await get_task_status_in_build(
@@ -2446,14 +2456,21 @@ async def get_build_executions(
     _raise_if_limit_exceeded(check_rate_limit(auth.workspace_id, limits_settings))
     build = await _get_build_checked(build_id, db, auth)
 
+    # Every execution-identity field comes off the *start event*, never off
+    # the task's current row. The row describes whoever holds the task now,
+    # and after a takeover that is somebody else's execution — pairing this
+    # build's historical ref with the successor's backend or metadata would
+    # hand back something that identifies no execution at all.
     ref_column = Event.event_metadata["executor_ref"].as_string()
     executor_column = Event.event_metadata["executor"].as_string()
+    metadata_column = Event.event_metadata["executor_metadata"]
     ranked = (
         select(
             Event.task_id.label("task_pk"),
             Event.created_at.label("started_at"),
             ref_column.label("executor_ref"),
             executor_column.label("executor"),
+            metadata_column.label("executor_metadata"),
             Event.id.label("event_id"),
             # id (UUID7) breaks created_at ties, the same way the status
             # replay does — without it two same-timestamp starts order by
@@ -2473,6 +2490,9 @@ async def get_build_executions(
             # A claiming start records no ref — the spawn has not happened
             # yet — and there is nothing to stop until the one that does.
             ref_column.is_not(None),
+            # ...and no backend name is an execution nobody can address, so
+            # it is not reported rather than reported half-identified.
+            executor_column.is_not(None),
         )
         .subquery()
     )
@@ -2496,6 +2516,7 @@ async def get_build_executions(
             Task,
             latest.c.executor,
             latest.c.executor_ref,
+            latest.c.executor_metadata,
             latest.c.started_at,
             latest.c.event_id,
         )
@@ -2524,19 +2545,17 @@ async def get_build_executions(
             BuildExecutionRef(
                 task_id=task.task_id,
                 latest_status=task.latest_status,
-                # Narrowed to str by the query's IS NOT NULL filter; an
-                # older event that recorded a ref without a backend name
-                # falls back to the task row's.
-                executor=cast(str, executor or task.latest_executor),
+                # Narrowed to str by the query's IS NOT NULL filters.
+                executor=cast(str, executor),
                 executor_ref=cast(str, executor_ref),
-                executor_metadata=task.latest_executor_metadata,
+                executor_metadata=executor_metadata,
                 latest_status_at=started_at,
             )
-            for task, executor, executor_ref, started_at, _ in page
+            for task, executor, executor_ref, executor_metadata, started_at, _ in page
         ],
         truncated=truncated,
         next_cursor=(
-            f"{page[-1][3].isoformat()}|{page[-1][4]}" if truncated and page else None
+            f"{page[-1][4].isoformat()}|{page[-1][5]}" if truncated and page else None
         ),
     )
 
@@ -3746,21 +3765,23 @@ async def cancel_task(
     db: Annotated[AsyncSession, Depends(get_db)],
     auth: Annotated[SdkAuth, Depends(require_sdk_auth)],
     commit_hash: str | None = None,
-    only_if_held: Annotated[
-        bool,
+    if_executor_ref: Annotated[
+        str | None,
         Query(
             description=(
                 "Record nothing unless this build still holds the task in "
-                "RUNNING or INTERRUPTED — the statuses that have a live "
-                "execution to revoke. For an engine cleaning up after "
-                "itself from a list it read a moment ago: by the time it "
-                "gets here another build may have reset the task and be "
-                "about to run it. Answers 200 with the unchanged status "
-                "rather than an error, since that is a normal outcome of "
-                "the race rather than a fault."
+                "RUNNING or INTERRUPTED *under this executor reference*. "
+                "For an engine cleaning up after itself from a list it read "
+                "a moment ago: by then another build may have reset the "
+                "task and be about to run it, or this build may have "
+                "started it again under a new reference — and revoking the "
+                "claim of an execution nobody stopped is the same damage in "
+                "a different direction. Answers 200 with the unchanged "
+                "status rather than an error, since losing that race is a "
+                "normal outcome and not a fault."
             ),
         ),
-    ] = False,
+    ] = None,
 ):
     """Cancel a task, releasing its execution claim and limit slots.
 
@@ -3785,7 +3806,7 @@ async def cancel_task(
         db,
         auth,
         commit_hash=commit_hash,
-        only_if_held=only_if_held,
+        if_executor_ref=if_executor_ref,
     )
 
 

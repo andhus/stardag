@@ -256,11 +256,39 @@ async def test_a_conditional_cancel_does_not_stamp_a_task_someone_reset(
 
     response = await client.post(
         f"/api/v1/builds/{owner}/tasks/shared/cancel",
-        params={"only_if_held": "true"},
+        params={"if_executor_ref": "fc-shared"},
     )
     assert response.status_code == 200, response.text
     assert await _task_status(client, "shared") == "pending", (
         "the cancelled build stamped a task another build had already reset"
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_conditional_cancel_does_not_revoke_a_newer_execution(
+    client: AsyncClient,
+):
+    """Ownership is not enough — the execution's identity has to match too.
+
+    Between the listing and this call, *this* build can have started the
+    task again: a retry it spawned, or a worker of the old attempt
+    self-reporting late. Status and owner still say "held by me", so a
+    check on those alone would revoke the claim of an execution nobody
+    stopped."""
+    build = await _new_build(client)
+    await _start(client, build, "restarted")
+    await client.post(
+        f"/api/v1/builds/{build}/tasks/restarted/start",
+        params={"executor": "modal", "executor_ref": "fc-newer"},
+    )
+
+    response = await client.post(
+        f"/api/v1/builds/{build}/tasks/restarted/cancel",
+        params={"if_executor_ref": "fc-restarted"},
+    )
+    assert response.status_code == 200, response.text
+    assert await _task_status(client, "restarted") == "running", (
+        "the cleanup pass revoked an execution it had never listed"
     )
 
 
@@ -275,7 +303,8 @@ async def test_a_conditional_cancel_still_revokes_what_this_build_holds(
     await _start(client, build, "mine")
 
     response = await client.post(
-        f"/api/v1/builds/{build}/tasks/mine/cancel", params={"only_if_held": "true"}
+        f"/api/v1/builds/{build}/tasks/mine/cancel",
+        params={"if_executor_ref": "fc-mine"},
     )
     assert response.status_code == 200, response.text
     assert await _task_status(client, "mine") == "cancelled"
@@ -293,7 +322,8 @@ async def test_a_conditional_cancel_of_an_already_cancelled_task_is_a_no_op(
 
     before = (await client.get("/api/v1/tasks/revoked")).json()["latest_status_at"]
     response = await client.post(
-        f"/api/v1/builds/{build}/tasks/revoked/cancel", params={"only_if_held": "true"}
+        f"/api/v1/builds/{build}/tasks/revoked/cancel",
+        params={"if_executor_ref": "fc-revoked"},
     )
     assert response.status_code == 200, response.text
     after = (await client.get("/api/v1/tasks/revoked")).json()["latest_status_at"]
@@ -342,6 +372,42 @@ async def test_only_the_latest_execution_of_a_task_is_listed(client: AsyncClient
 
     listed = await _executions(client, build)
     assert [e["executor_ref"] for e in listed["executions"]] == ["fc-second"]
+
+
+@pytest.mark.asyncio
+async def test_execution_identity_comes_from_the_start_event(client: AsyncClient):
+    """Never from the task's current row, which after a takeover describes
+    somebody else's execution. Pairing this build's historical ref with the
+    successor's backend or metadata would hand back something that
+    identifies no execution at all."""
+    owner = await _new_build(client)
+    await client.post(f"/api/v1/builds/{owner}/tasks", json=_register("shared"))
+    await client.post(
+        f"/api/v1/builds/{owner}/tasks/shared/start",
+        params={
+            "executor": "modal",
+            "executor_ref": "fc-mine",
+            "executor_metadata": '{"app": "mine"}',
+        },
+    )
+    await client.post(f"/api/v1/builds/{owner}/cancel", params={"cascade": "true"})
+
+    taker = await _new_build(client)
+    await _reference(client, taker, "shared")
+    await client.post(f"/api/v1/builds/{taker}/tasks/shared/retry")
+    await client.post(
+        f"/api/v1/builds/{taker}/tasks/shared/start",
+        params={
+            "executor": "other-backend",
+            "executor_ref": "fc-theirs",
+            "executor_metadata": '{"app": "theirs"}',
+        },
+    )
+
+    mine = (await _executions(client, owner))["executions"][0]
+    assert mine["executor_ref"] == "fc-mine"
+    assert mine["executor"] == "modal", "the successor's backend leaked in"
+    assert mine["executor_metadata"] == {"app": "mine"}
 
 
 @pytest.mark.asyncio

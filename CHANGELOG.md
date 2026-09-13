@@ -9,7 +9,7 @@ For detailed SDK migration guides, see [RELEASE_NOTES.md](RELEASE_NOTES.md).
 ### SDK
 
 - **Breaking, for anyone implementing `RegistryABC` outside this repo:**
-  `task_cancel_aio` takes a keyword-only `only_if_held`, and
+  `task_cancel_aio` takes a keyword-only `if_executor_ref`, and
   `build_get_executions` / `build_get_executions_aio` take a keyword-only
   `cursor`. Subclasses that override the old signatures raise `TypeError`
   when the reactive tick calls them; the call sites log and continue, so the
@@ -75,12 +75,13 @@ For detailed SDK migration guides, see [RELEASE_NOTES.md](RELEASE_NOTES.md).
   frontier, so a scheduler can tell its own executions from a neighbour's.
 - `POST /builds/{id}/notify` flags only a RUNNING build, and reports
   `needs_tick` accordingly.
-- `POST /builds/{b}/tasks/{t}/cancel?only_if_held=true` records nothing
-  unless this build still holds the task in RUNNING or INTERRUPTED —
-  evaluated on the locked row, so an engine cleaning up after itself from a
-  listing it read a moment ago cannot stamp a task another build has since
-  reset and is about to run. A no-op rather than an error: losing that race
-  is a normal outcome, not a fault.
+- `POST /builds/{b}/tasks/{t}/cancel?if_executor_ref=…` records nothing
+  unless this build still holds the task in RUNNING or INTERRUPTED **under
+  that execution** — evaluated on the locked row, so an engine cleaning up
+  after itself from a listing it read a moment ago can neither stamp a task
+  another build has since reset and is about to run, nor revoke the claim of
+  an execution it started since and nobody stopped. A no-op rather than an
+  error: losing that race is a normal outcome, not a fault.
 
 ## [0.23.0] — 2026-09-01
 

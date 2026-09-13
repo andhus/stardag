@@ -1548,19 +1548,21 @@ class RegistryABC(metaclass=abc.ABCMeta):
         self.task_resume(build_id, task)
 
     async def task_cancel_aio(
-        self, build_id: UUID, task: "BaseTask", *, only_if_held: bool = False
+        self, build_id: UUID, task: "BaseTask", *, if_executor_ref: str | None = None
     ) -> None:
         """Async version of task_cancel.
 
-        ``only_if_held``: record nothing unless this build still holds the
-        task in a status with an execution to revoke (RUNNING or
-        INTERRUPTED). For an engine cleaning up after itself from a listing
-        it read a moment ago — by then another build may have reset the task
-        and be about to run it, and stamping that CANCELLED would send it
-        round the reset loop. Backends that cannot evaluate it ignore it;
-        the argument is a narrowing, so ignoring it is the old behaviour.
+        ``if_executor_ref``: record nothing unless this build still holds
+        the task in a status with an execution to revoke (RUNNING or
+        INTERRUPTED), **under that execution**. For an engine cleaning up
+        after itself from a listing it read a moment ago: by then another
+        build may have reset the task and be about to run it, or this build
+        may have started it again under a new ref — and revoking the claim
+        of an execution nobody stopped is the same damage in the other
+        direction. Backends that cannot evaluate it ignore it; the argument
+        is a narrowing, so ignoring it is the old behaviour.
         """
-        del only_if_held
+        del if_executor_ref
         self.task_cancel(build_id, task)
 
     async def task_skip_aio(self, build_id: UUID, task: "BaseTask") -> None:

@@ -2307,20 +2307,20 @@ class APIRegistry(RegistryABC):
         )
 
     async def task_cancel_aio(
-        self, build_id: UUID, task: "BaseTask", *, only_if_held: bool = False
+        self, build_id: UUID, task: "BaseTask", *, if_executor_ref: str | None = None
     ) -> None:
         """Async version - cancel a task."""
         await self.task_cancel_by_id_aio(
-            build_id, str(task.id), only_if_held=only_if_held
+            build_id, str(task.id), if_executor_ref=if_executor_ref
         )
 
     async def task_cancel_by_id_aio(
-        self, build_id: UUID, task_id: str, *, only_if_held: bool = False
+        self, build_id: UUID, task_id: str, *, if_executor_ref: str | None = None
     ) -> None:
         """Async version - cancel a task addressed by id."""
         params = self._get_event_params()
-        if only_if_held:
-            params["only_if_held"] = "true"
+        if if_executor_ref is not None:
+            params["if_executor_ref"] = if_executor_ref
         await self._arequest(
             "POST",
             f"{self.api_url}/api/v1/builds/{build_id}/tasks/{task_id}/cancel",

@@ -781,16 +781,19 @@ async def _cancel_running(
             )
             continue
         try:
-            # ``only_if_held``: the registry re-checks, on the locked row,
-            # that this build still holds the task in a status with an
-            # execution to revoke, and records nothing otherwise. Two things
-            # need that, and neither is visible from the listing. A task the
-            # cascade already cancelled needs no second event; and by now
-            # another build may have reset this one and be about to run it,
-            # where writing CANCELLED takes no claim but does stamp a
-            # neighbour's freshly scheduled task dead — the exact churn this
-            # whole pass exists to stop causing.
-            await registry.task_cancel_aio(build_id, task, only_if_held=True)
+            # The registry re-checks, on the locked row, that this build
+            # still holds the task in a status with an execution to revoke
+            # *and that the execution is the one just stopped*, recording
+            # nothing otherwise. Three things need that, and none is visible
+            # from the listing: a task the cascade already cancelled needs no
+            # second event; another build may have reset this one and be
+            # about to run it, where writing CANCELLED stamps a neighbour's
+            # freshly scheduled task dead; and this build may have started it
+            # again under a new ref, where writing CANCELLED would revoke the
+            # claim of an execution nobody stopped.
+            await registry.task_cancel_aio(
+                build_id, task, if_executor_ref=item.executor_ref
+            )
         except Exception as e:
             logger.warning(f"Failed to record cancellation of task {item.task_id}: {e}")
 

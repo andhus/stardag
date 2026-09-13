@@ -474,13 +474,17 @@ class FakeReactiveRegistry(NoOpRegistry):
         self.calls.append(("add_roots", ",".join(root_task_ids)))
         self.root_task_ids += [t for t in root_task_ids if t not in self.root_task_ids]
 
-    async def task_cancel_aio(self, build_id, task, *, only_if_held: bool = False):
+    async def task_cancel_aio(self, build_id, task, *, if_executor_ref=None):
         tid = str(task.id)
-        if only_if_held and self.statuses.get(tid) not in ("running", "interrupted"):
-            # The server's rule, on the locked row: nothing to revoke, so
-            # nothing is recorded. Modelled because the tick's cleanup pass
-            # relies on it to not stamp a task another build has since
-            # reset -- a no-op here, not an error.
+        if if_executor_ref is not None and (
+            self.statuses.get(tid) not in ("running", "interrupted")
+            or self.refs.get(tid, (None, None))[1] != if_executor_ref
+        ):
+            # The server's rule, on the locked row: nothing to revoke under
+            # that execution, so nothing is recorded. Modelled because the
+            # tick's cleanup pass relies on it -- to not stamp a task another
+            # build has since reset, and to not revoke an execution this
+            # build started after the listing was read.
             self.calls.append(("cancel-skipped", tid))
             return
         self.calls.append(("cancel", tid))

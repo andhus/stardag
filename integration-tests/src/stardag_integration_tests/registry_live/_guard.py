@@ -32,6 +32,7 @@ calls it.
 from __future__ import annotations
 
 import os
+import time
 from typing import TYPE_CHECKING, Callable, NoReturn
 
 if TYPE_CHECKING:
@@ -159,6 +160,14 @@ def _assert_registry_points_at(
         )
 
 
+# How many times the reachability round-trip is attempted, and how long to
+# back off between them. Sized for a Modal cold start rather than for a
+# broken deployment: a stack that is genuinely down fails all of them in a
+# few seconds, which is still a fast, clear failure.
+_REACHABILITY_ATTEMPTS = 4
+_REACHABILITY_BACKOFF_SECONDS = 3.0
+
+
 def _assert_registry_answers(
     registry: "APIRegistry", api_url: str, refuse: Refuse
 ) -> None:
@@ -182,13 +191,29 @@ def _assert_registry_answers(
             "meaningful round-trip can be made."
         )
 
-    try:
-        response = registry.client.get(
-            f"{registry.api_url}/api/v1/builds",
-            params={"environment_id": registry.environment_id, "limit": 1},
-        )
-    except httpx.HTTPError as error:
-        refuse(f"The deployed registry at {api_url} is unreachable: {error!r}")
+    # Retried, because the expected first state of a freshly provisioned
+    # stack is a *cold* container: the registry scales to zero, twelve xdist
+    # workers each run this guard at import, and the one that arrives first
+    # pays the cold start. A single attempt turns that into a collection
+    # error for the whole tier — and the message it produces ("the deployed
+    # registry is unreachable") sends the reader to the deployment, which is
+    # fine. Seen twice in CI before this was added.
+    response = None
+    for attempt in range(_REACHABILITY_ATTEMPTS):
+        try:
+            response = registry.client.get(
+                f"{registry.api_url}/api/v1/builds",
+                params={"environment_id": registry.environment_id, "limit": 1},
+            )
+            break
+        except httpx.HTTPError as error:
+            if attempt == _REACHABILITY_ATTEMPTS - 1:
+                refuse(
+                    f"The deployed registry at {api_url} is unreachable after "
+                    f"{_REACHABILITY_ATTEMPTS} attempts: {error!r}"
+                )
+            time.sleep(_REACHABILITY_BACKOFF_SECONDS * (attempt + 1))
+    assert response is not None  # refuse() above never returns
 
     if response.status_code != 200:
         # Name the credential and the scope, because "401" on its own sends
