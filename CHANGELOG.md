@@ -8,6 +8,13 @@ For detailed SDK migration guides, see [RELEASE_NOTES.md](RELEASE_NOTES.md).
 
 ### SDK
 
+- **Breaking, for anyone implementing `RegistryABC` outside this repo:**
+  `task_cancel_aio` takes a keyword-only `only_if_held`, and
+  `build_get_executions` / `build_get_executions_aio` take a keyword-only
+  `cursor`. Subclasses that override the old signatures raise `TypeError`
+  when the reactive tick calls them; the call sites log and continue, so the
+  symptom is a cancel that is never recorded rather than a crash.
+
 - **A cancelled or failing build no longer stops other builds' executions.**
   The tick's cancel pass read the frontier's `running` list, which is every
   RUNNING task in the build's _plan_ — and after plan closure that includes
@@ -56,6 +63,9 @@ For detailed SDK migration guides, see [RELEASE_NOTES.md](RELEASE_NOTES.md).
   and terminal statuses stay cancellable by any build; they hold no claim.
 - `GET /builds/{build_id}/executions`: the detached executions this build
   started and has not seen end, with the backend and ref to stop them by.
+  Paged with a keyset `cursor` — stopping an execution records nothing, so
+  the answer does not shrink as a caller works through it, and a bare cap
+  would hand back the same page forever.
   Answered from the event log rather than from the task rows, because the
   question is about the past: releasing a claim is what lets the next build
   take the task over, so by the time a cancelled build ticks, the row may

@@ -527,10 +527,13 @@ class BuildExecutionsResponse(BaseModel):
     build_id: UUID
     build_status: BuildStatus
     executions: list[BuildExecutionRef] = []
-    # True when the cap was reached and more owned executions exist. A
-    # caller that stops them and asks again makes progress, since stopping
-    # one takes it out of this list.
+    # True when the cap was reached and more exist — ask again with
+    # ``next_cursor``. Stopping an execution records nothing, so this answer
+    # does not shrink as a caller works through it: asking again *without*
+    # the cursor returns the same page forever, and a wide build's tail
+    # would never be reached.
     truncated: bool = False
+    next_cursor: str | None = None
 
 
 class AddBuildRootsRequest(BaseModel):

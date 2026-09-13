@@ -188,6 +188,12 @@ class FakeReactiveRegistry(NoOpRegistry):
         # where the fallback cannot filter by ownership either.
         self.serves_status_build_id = True
         self.executions_calls: list[UUID] = []
+        # A transient failure of the executions listing — distinct from
+        # ``serves_executions``, which models a server that lacks the route.
+        self.executions_error: Exception | None = None
+        # Page size of the executions listing, so a test can force the
+        # drain loop the real server's cap makes reachable.
+        self.executions_page_size = 100
 
     # --- test setup helpers ---
 
@@ -664,7 +670,9 @@ class FakeReactiveRegistry(NoOpRegistry):
             self.lease_on_release()
         return SchedulerLeaseResult(build_id=build_id, held=held)
 
-    async def build_get_executions_aio(self, build_id) -> BuildExecutions:
+    async def build_get_executions_aio(
+        self, build_id, *, cursor=None
+    ) -> BuildExecutions:
         """Mirrors the API: this build's own executions, with a ref.
 
         Ownership is ``status_build_id`` being absent (this build put the
@@ -673,6 +681,8 @@ class FakeReactiveRegistry(NoOpRegistry):
         an attempt it already abandoned, not a container to chase.
         """
         self.executions_calls.append(build_id)
+        if self.executions_error is not None:
+            raise self.executions_error
         if not self.serves_executions:
             # FastAPI's own unknown-path 404, which is how the SDK tells
             # "this server is too old" from "no such build".
@@ -696,10 +706,24 @@ class FakeReactiveRegistry(NoOpRegistry):
                     latest_status_at=self.status_at.get(tid),
                 )
             )
+        # Keyset paging, modelled because the tick has to drain it: the
+        # server's answer does not shrink as executions are stopped, so a
+        # caller that re-asks without the cursor gets the same page forever.
+        executions.sort(key=lambda e: e.task_id)
+        start = 0
+        if cursor is not None:
+            start = next(
+                (i + 1 for i, e in enumerate(executions) if e.task_id == cursor),
+                len(executions),
+            )
+        page = executions[start : start + self.executions_page_size]
+        truncated = start + len(page) < len(executions)
         return BuildExecutions(
             build_id=build_id,
             build_status=self.build_status,
-            executions=executions,
+            executions=page,
+            truncated=truncated,
+            next_cursor=page[-1].task_id if truncated and page else None,
         )
 
     async def build_get_frontier_aio(self, build_id) -> BuildFrontier:

@@ -261,9 +261,12 @@ class BuildExecutions(StardagBaseModel):
     build_id: UUID
     build_status: str
     executions: list[BuildExecution] = []
-    # The server capped the list. Stopping an execution takes it out of the
-    # answer, so a caller that acts and asks again makes progress.
+    # The server capped the page; ``next_cursor`` continues it. Stopping an
+    # execution records nothing, so this answer does not shrink as a caller
+    # works through it — asking again without the cursor would return the
+    # same page forever.
     truncated: bool = False
+    next_cursor: str | None = None
 
 
 class WakeCandidate(StardagBaseModel):
@@ -1081,7 +1084,9 @@ class RegistryABC(metaclass=abc.ABCMeta):
         """Async version of build_get_frontier."""
         return self.build_get_frontier(build_id)
 
-    def build_get_executions(self, build_id: UUID) -> BuildExecutions:
+    def build_get_executions(
+        self, build_id: UUID, *, cursor: str | None = None
+    ) -> BuildExecutions:
         """Detached executions this build must stop (``GET .../executions``).
 
         Authority to revoke is build-scoped, so an engine tearing a build
@@ -1092,9 +1097,11 @@ class RegistryABC(metaclass=abc.ABCMeta):
             f"{type(self).__name__} does not support build_get_executions"
         )
 
-    async def build_get_executions_aio(self, build_id: UUID) -> BuildExecutions:
+    async def build_get_executions_aio(
+        self, build_id: UUID, *, cursor: str | None = None
+    ) -> BuildExecutions:
         """Async version of build_get_executions."""
-        return self.build_get_executions(build_id)
+        return self.build_get_executions(build_id, cursor=cursor)
 
     def build_get(self, build_id: UUID) -> BuildInfo:
         """Return a slim build record (``GET /builds/{id}``).

@@ -1902,22 +1902,32 @@ class APIRegistry(RegistryABC):
         )
         return BuildFrontier.model_validate(response.json())
 
-    def build_get_executions(self, build_id: UUID) -> BuildExecutions:
+    def build_get_executions(
+        self, build_id: UUID, *, cursor: str | None = None
+    ) -> BuildExecutions:
         """Detached executions this build must stop."""
+        params = self._get_params()
+        if cursor:
+            params["cursor"] = cursor
         response = self._request(
             "GET",
             f"{self.api_url}/api/v1/builds/{build_id}/executions",
-            params=self._get_params(),
+            params=params,
             operation=f"Get executions for build {build_id}",
         )
         return BuildExecutions.model_validate(response.json())
 
-    async def build_get_executions_aio(self, build_id: UUID) -> BuildExecutions:
+    async def build_get_executions_aio(
+        self, build_id: UUID, *, cursor: str | None = None
+    ) -> BuildExecutions:
         """Async version - detached executions this build must stop."""
+        params = self._get_params()
+        if cursor:
+            params["cursor"] = cursor
         response = await self._arequest(
             "GET",
             f"{self.api_url}/api/v1/builds/{build_id}/executions",
-            params=self._get_params(),
+            params=params,
             operation=f"Get executions for build {build_id}",
         )
         return BuildExecutions.model_validate(response.json())

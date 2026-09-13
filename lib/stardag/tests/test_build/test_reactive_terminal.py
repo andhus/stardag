@@ -21,6 +21,7 @@ from stardag.build._reactive import (
     TickSummary,
     _skip_blocked,
 )
+from stardag import BaseTask
 from stardag.exceptions import NotFoundError
 from stardag.registry import (
     NoOpRegistry,
@@ -235,6 +236,76 @@ class TestCancelAuthority:
         # Already CANCELLED in the registry: a second event would say
         # nothing the cascade has not already recorded.
         assert ("cancel", str(root.id)) not in registry.calls
+
+    async def test_every_page_of_executions_is_drained(
+        self, default_in_memory_fs_target: typing.Type[InMemoryFileTarget]
+    ):
+        """One page is not enough, and there is no second chance.
+
+        Stopping an execution records nothing — a cancel is a request, not
+        an end — so the listing does not shrink as this pass works through
+        it. A single call would leave a wide build's tail running with
+        nothing to come back for: a terminal tick does not run again, and a
+        build that is no longer RUNNING is not re-flagged.
+        """
+        tasks: list[BaseTask] = [
+            SyncOnlyTask(name=f"wide-{index}") for index in range(5)
+        ]
+        registry, executor, store = _setup(tasks, auto_complete=False)
+        registry.executions_page_size = 2
+        for index, task in enumerate(tasks):
+            registry.add_task(
+                str(task.id),
+                status="running",
+                executor="fake",
+                executor_ref=f"fc-{index}",
+            )
+        registry.build_status = "cancelled"
+
+        await run_tick_aio(
+            uuid4(),
+            registry=registry,
+            task_executor=executor,
+            task_store=store,
+            config=FAST_TICK,
+        )
+
+        assert sorted(executor.cancelled_refs) == [f"fc-{i}" for i in range(5)], (
+            f"the cancel pass stopped only the first page: {executor.cancelled_refs}"
+        )
+
+    async def test_a_transient_executions_failure_is_not_a_missing_route(
+        self, default_in_memory_fs_target: typing.Type[InMemoryFileTarget]
+    ):
+        """Degrading to the frontier here would be silent and total.
+
+        For a cascaded build the frontier sees CANCELLED tasks and therefore
+        nothing at all — so a transient failure treated as "this server is
+        old" would report nothing to stop, let the tick exit, and leave the
+        containers running with no second chance. It errors out instead,
+        where it is visible and the cancel can be re-issued.
+        """
+        (root,) = _chain("transient-root")
+        registry, executor, store = _setup([root], auto_complete=False)
+        registry.add_task(
+            str(root.id), status="cancelled", executor="fake", executor_ref="fc-mine"
+        )
+        registry.build_status = "cancelled"
+        registry.executions_error = RuntimeError("registry unavailable")
+
+        with pytest.raises(RuntimeError, match="registry unavailable"):
+            await run_tick_aio(
+                uuid4(),
+                registry=registry,
+                task_executor=executor,
+                task_store=store,
+                config=FAST_TICK,
+            )
+
+        assert executor.cancelled_refs == []
+        # Reported before it propagates, so the failure is on the build's
+        # trail rather than only in a container log.
+        assert registry.reported_tick_summaries[-1]["outcome"] == "error"
 
     async def test_an_old_server_is_filtered_on_the_frontiers_owner_field(
         self, default_in_memory_fs_target: typing.Type[InMemoryFileTarget]

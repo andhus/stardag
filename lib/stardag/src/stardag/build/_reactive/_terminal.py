@@ -33,6 +33,13 @@ if typing.TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# How many pages of owned executions one cancel pass will drain. A bound
+# rather than a while-True: the pass runs inside a tick with a finite
+# budget, and a runaway loop there costs the build its last chance to stop
+# anything. At the server's page size this covers builds far wider than
+# anything a single reactive plan has held.
+_MAX_EXECUTION_PAGES = 20
+
 
 def _format_age(seconds: float) -> str:
     """Render an age the way an operator reads it.
@@ -796,9 +803,17 @@ async def _executions_to_stop(
 ) -> list[BuildExecution]:
     """Ask the registry what is this build's to stop; fall back if it can't.
 
-    The fallback is for a server predating the route, and it is the old
-    frontier-derived list with the ownership filter the frontier can now
-    support — ``latest_status_build_id``. A server old enough to lack
+    The fallback is for a server predating the route — a missing route or a
+    backend that does not implement it, and **nothing else**. A transient
+    failure must not land here: for a cascaded build the frontier sees
+    CANCELLED tasks and therefore nothing at all, so degrading quietly would
+    report "nothing to stop", let the tick exit, and leave the containers
+    running with no second chance — a terminal build gets no further tick,
+    and ``notify`` no longer re-flags one. Better to let that error out of
+    the tick, where it is visible and the cancel can be re-issued.
+
+    What the fallback is, when it does apply: the old frontier-derived list
+    with the ownership filter the frontier can now support — ``latest_status_build_id``. A server old enough to lack
     *that* too reports None, and None cannot be read as "not mine": it
     means "this server cannot say", so the item is acted on exactly as
     before. That keeps an old server no worse off than it is today, which
@@ -808,14 +823,28 @@ async def _executions_to_stop(
     handled as soon as the server is new enough to know about them.
     """
     try:
-        listed = await registry.build_get_executions_aio(build_id)
-        if listed.truncated:
-            logger.info(
-                f"Build {build_id} has more executions to stop than the "
-                "registry returns at once; stopping this batch and leaving "
-                "the rest to the next pass."
+        executions: list[BuildExecution] = []
+        cursor: str | None = None
+        # Drained, not sampled. Stopping an execution records nothing — a
+        # cancel is a request, not an end — so the answer does not shrink as
+        # this pass works through it, and one call would leave a wide
+        # build's tail running with nothing to come back for: a terminal
+        # tick does not run again, and a build that is no longer RUNNING is
+        # not re-flagged.
+        for _ in range(_MAX_EXECUTION_PAGES):
+            listed = await registry.build_get_executions_aio(build_id, cursor=cursor)
+            executions += listed.executions
+            cursor = listed.next_cursor
+            if not listed.truncated or not cursor:
+                break
+        else:
+            logger.warning(
+                f"Build {build_id} has more executions to stop than "
+                f"{_MAX_EXECUTION_PAGES} pages; stopping the ones read so "
+                "far. The rest keep running until their backend times them "
+                "out."
             )
-        return list(listed.executions)
+        return executions
     except NotFoundError as e:
         if not is_missing_route_error(e):
             raise
@@ -826,11 +855,6 @@ async def _executions_to_stop(
         )
     except NotImplementedError:
         pass
-    except Exception as e:
-        logger.warning(
-            f"Could not read the executions of build {build_id} ({e}); "
-            "falling back to the frontier."
-        )
 
     cancellable = _RUNNING_STATUSES + (_INTERRUPTED_STATUS,)
     # Re-read, because the snapshot the caller holds is the PRE-action one.

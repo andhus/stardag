@@ -345,6 +345,47 @@ async def test_only_the_latest_execution_of_a_task_is_listed(client: AsyncClient
 
 
 @pytest.mark.asyncio
+async def test_executions_page_through_a_cursor(client: AsyncClient, monkeypatch):
+    """Paging, not a bare cap. Stopping an execution records nothing — a
+    cancel is a request, not an end — so the answer does not shrink as a
+    caller works through it, and asking again without a cursor would return
+    the same page forever, leaving a wide build's tail running."""
+    from stardag_api.routes import builds as builds_routes
+
+    monkeypatch.setattr(builds_routes, "_MAX_BUILD_EXECUTIONS", 2)
+    build = await _new_build(client)
+    for index in range(5):
+        await _start(client, build, f"wide-{index}")
+
+    seen: list[str] = []
+    cursor: str | None = None
+    for _ in range(5):
+        params = {"cursor": cursor} if cursor else {}
+        page = (
+            await client.get(f"/api/v1/builds/{build}/executions", params=params)
+        ).json()
+        seen += [e["task_id"] for e in page["executions"]]
+        cursor = page["next_cursor"]
+        if not page["truncated"]:
+            break
+
+    assert sorted(seen) == [f"wide-{i}" for i in range(5)]
+    assert len(seen) == len(set(seen)), f"a task was handed out twice: {seen}"
+    assert cursor is None
+
+
+@pytest.mark.asyncio
+async def test_a_malformed_cursor_is_rejected(client: AsyncClient):
+    """Rather than silently restarting from the top, which is the loop this
+    paging exists to remove."""
+    build = await _new_build(client)
+    response = await client.get(
+        f"/api/v1/builds/{build}/executions", params={"cursor": "nonsense"}
+    )
+    assert response.status_code == 400, response.text
+
+
+@pytest.mark.asyncio
 async def test_executions_skips_a_task_with_no_recorded_ref(client: AsyncClient):
     """The window between the claiming start and the one that records the
     ref. There is nothing to cancel, and the claim is released by the

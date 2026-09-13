@@ -7,7 +7,7 @@ from typing import Annotated, Any, Mapping, Sequence, cast
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import delete, func, select, tuple_, update
+from sqlalchemy import delete, func, literal, select, tuple_, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -2389,6 +2389,18 @@ async def get_build_executions(
     build_id: UUID,
     db: Annotated[AsyncSession, Depends(get_db)],
     auth: Annotated[SdkAuth, Depends(require_sdk_auth)],
+    cursor: Annotated[
+        str | None,
+        Query(
+            description=(
+                "Continue a previous page: pass the ``next_cursor`` it "
+                "returned. Keyset rather than offset, because stopping an "
+                "execution records nothing — the answer does not shrink as "
+                "a caller works through it, and an offset would be stable "
+                "only until a worker reported one over."
+            ),
+        ),
+    ] = None,
 ):
     """The detached executions this build started and never saw end.
 
@@ -2420,10 +2432,16 @@ async def get_build_executions(
     touch anybody else's container, which is what makes answering from the
     past safe rather than reckless.
 
-    Newest first, capped (see ``_MAX_BUILD_EXECUTIONS``). Cancelling is
-    idempotent at every backend stardag supports, so a ref stopped twice —
-    or one whose execution already ended without this build hearing about
-    it — costs nothing.
+    Newest first, paged with a keyset ``cursor``. Paging rather than a bare
+    cap, because stopping an execution records nothing — a cancel is a
+    request, not an end, which is the whole point above — so this answer
+    does not shrink as a caller works through it. Asking again without the
+    cursor would return the same page forever and a wide build's tail would
+    never be reached.
+
+    Cancelling is idempotent at every backend stardag supports, so a ref
+    stopped twice — or one whose execution already ended without this build
+    hearing about it — costs nothing.
     """
     _raise_if_limit_exceeded(check_rate_limit(auth.workspace_id, limits_settings))
     build = await _get_build_checked(build_id, db, auth)
@@ -2473,22 +2491,32 @@ async def get_build_executions(
         )
         .exists()
     )
-    rows = (
-        await db.execute(
-            select(
-                Task,
-                latest.c.executor,
-                latest.c.executor_ref,
-                latest.c.started_at,
-            )
-            .join(latest, latest.c.task_pk == Task.id)
-            .where(~ended)
-            .order_by(latest.c.started_at.desc())
-            .limit(_MAX_BUILD_EXECUTIONS + 1)
+    query = (
+        select(
+            Task,
+            latest.c.executor,
+            latest.c.executor_ref,
+            latest.c.started_at,
+            latest.c.event_id,
         )
-    ).all()
+        .join(latest, latest.c.task_pk == Task.id)
+        .where(~ended)
+        # The same total order the cursor walks, and the same tie-break the
+        # ranking above uses.
+        .order_by(latest.c.started_at.desc(), latest.c.event_id.desc())
+        .limit(_MAX_BUILD_EXECUTIONS + 1)
+    )
+    after = _parse_executions_cursor(cursor)
+    if after is not None:
+        after_started_at, after_event_id = after
+        query = query.where(
+            tuple_(latest.c.started_at, latest.c.event_id)
+            < tuple_(literal(after_started_at), literal(after_event_id))
+        )
+    rows = (await db.execute(query)).all()
 
     truncated = len(rows) > _MAX_BUILD_EXECUTIONS
+    page = rows[:_MAX_BUILD_EXECUTIONS]
     return BuildExecutionsResponse(
         build_id=build_id,
         build_status=build.latest_status,
@@ -2504,10 +2532,32 @@ async def get_build_executions(
                 executor_metadata=task.latest_executor_metadata,
                 latest_status_at=started_at,
             )
-            for task, executor, executor_ref, started_at in rows[:_MAX_BUILD_EXECUTIONS]
+            for task, executor, executor_ref, started_at, _ in page
         ],
         truncated=truncated,
+        next_cursor=(
+            f"{page[-1][3].isoformat()}|{page[-1][4]}" if truncated and page else None
+        ),
     )
+
+
+def _parse_executions_cursor(cursor: str | None) -> tuple[datetime, UUID] | None:
+    """Decode a ``next_cursor`` back into the keyset it names.
+
+    A 400 rather than a silent restart from the top: a caller handed page
+    one again would loop over it, which is the failure this paging exists to
+    remove.
+    """
+    if not cursor:
+        return None
+    started_at, _, event_id = cursor.partition("|")
+    try:
+        return datetime.fromisoformat(started_at), UUID(event_id)
+    except ValueError:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Malformed executions cursor: {cursor!r}",
+        ) from None
 
 
 # --- Tasks within Builds ---
