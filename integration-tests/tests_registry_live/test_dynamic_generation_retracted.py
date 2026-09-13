@@ -118,10 +118,19 @@ def test_an_abandoned_generation_is_not_re_run() -> None:
         status = wait_for_terminal(build_two, timeout=BUILD_TIMEOUT_SECONDS)
         assert status == "completed", describe(build_two)
 
-        # The point of the run. Build two reset the parent, which retracted
-        # the abandoned generation, so nothing ever asked for it again.
+        # The point of the run. Build two never admitted the abandoned
+        # generation and never reset the parent onto it, so nothing asked
+        # for it again.
+        #
+        # Either never-executed status is a pass, and which one appears is
+        # a detail of the cancel rather than of this fix: a cascade releases
+        # the claims the build *holds*, so a child that had started is
+        # CANCELLED and one that had not is left PENDING. The second is the
+        # more dangerous of the two and the reason closure had to learn
+        # this rule -- a pending stale child is actionable the moment it
+        # lands in a plan, and runs long before anything would retract it.
         stale = {str(task.id): task_status(task.id) for task in first}
-        assert set(stale.values()) == {"cancelled"}, (
+        assert set(stale.values()) <= {"pending", "cancelled"}, (
             "A build re-ran an abandoned generation of dynamic dependencies. "
             "They gated the parent it needed, so it reset them to un-gate "
             "it -- work its own fan-out was never going to ask for.\n"

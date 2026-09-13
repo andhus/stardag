@@ -7,7 +7,16 @@ from typing import Annotated, Any, Mapping, Sequence, cast
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import delete, func, literal, select, tuple_, update
+from sqlalchemy import (
+    ColumnElement,
+    delete,
+    false,
+    func,
+    literal,
+    select,
+    tuple_,
+    update,
+)
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -2597,6 +2606,28 @@ def _parse_executions_cursor(cursor: str | None) -> tuple[datetime, UUID] | None
 # --- Tasks within Builds ---
 
 
+def _not_abandoned_dynamic_edge(downstream: Any) -> ColumnElement[bool]:
+    """Dynamic edges of a CANCELLED upstream do not admit anything.
+
+    The one shape plan closure must not follow. A cancelled task is what a
+    tick resets — the revocation-is-not-a-result rule — and resetting it
+    retracts the dynamic dependencies its abandoned attempt yielded. So the
+    tasks on the far side of those edges are a generation nobody is going to
+    ask for again, and admitting them puts them in the plan where the build
+    will find them PENDING, actionable, and run them. Measured, not
+    theorised: a cancelled build's fan-out was re-run in full by the next
+    build, because its children never reached RUNNING before the cancel and
+    so were never cancelled with it.
+
+    Static edges are unaffected: a cancelled upstream a build statically
+    requires is still a dependency it has to satisfy, and resetting it is
+    how it does that.
+    """
+    return (TaskDependency.is_dynamic.is_(False)) | (
+        downstream.latest_status != TaskStatus.CANCELLED
+    )
+
+
 async def _close_plan_over_dependencies(
     db: AsyncSession,
     *,
@@ -2658,6 +2689,11 @@ async def _close_plan_over_dependencies(
     admitted = 0
     frontier_pks = list(task_pks)
     seen: set[UUID] = set(task_pks)
+    # The edge's *downstream* end, i.e. the task whose dependency this is.
+    # ``Task`` in the query below is the upstream being admitted, so the
+    # rule about abandoned generations — which is about the task that
+    # yielded them — needs its own handle on the other side of the edge.
+    downstream = aliased(Task)
     while frontier_pks:
         in_plan = (
             select(Event.task_id)
@@ -2670,6 +2706,10 @@ async def _close_plan_over_dependencies(
                 await db.execute(
                     select(Task)
                     .join(TaskDependency, TaskDependency.upstream_task_id == Task.id)
+                    .join(
+                        downstream,
+                        downstream.id == TaskDependency.downstream_task_id,
+                    )
                     .where(
                         TaskDependency.downstream_task_id.in_(frontier_pks),
                         Task.latest_status != TaskStatus.COMPLETED,
@@ -2681,6 +2721,24 @@ async def _close_plan_over_dependencies(
                         # pull an abandoned generation into the plan for no
                         # benefit at all.
                         TaskDependency.superseded_at.is_(None),
+                        # ...and nor does one hanging off a CANCELLED task,
+                        # for the same reason one step later. Retraction
+                        # fires when a task is *reset*, and a cancelled
+                        # upstream is exactly the one status a tick resets
+                        # — so those edges are about to be retracted, and
+                        # everything they would admit is an abandoned
+                        # generation the reset task will not ask for again.
+                        #
+                        # Narrow on purpose. Every other status keeps
+                        # today's over-approximation: RUNNING and SUSPENDED
+                        # are the case the closure was written for (a
+                        # neighbour progressing a fan-out, scenario S2);
+                        # FAILED and SKIPPED are results a tick will not
+                        # reset, so a build gated behind one should see it
+                        # and say so; and PENDING covers edges recorded
+                        # before retraction existed, which nothing will
+                        # retract.
+                        _not_abandoned_dynamic_edge(downstream),
                     )
                     .distinct()
                 )

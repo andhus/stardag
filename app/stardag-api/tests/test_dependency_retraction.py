@@ -267,6 +267,47 @@ async def test_a_retracted_edge_admits_nothing_into_a_new_builds_plan(
 
 
 @pytest.mark.asyncio
+async def test_a_cancelled_parents_generation_is_not_admitted_either(
+    client: AsyncClient,
+):
+    """Retraction alone is not enough, and a live run is what showed it.
+
+    A cascade cancels the claims a build holds — RUNNING, SUSPENDED,
+    INTERRUPTED — and deliberately leaves PENDING tasks alone. So a build
+    cancelled shortly after a fan-out yields leaves its children *pending*,
+    not cancelled. Plan closure then admits them to the next build, where
+    they are immediately actionable, and it runs the whole abandoned
+    generation before it ever resets the parent and retracts them.
+
+    So closure must not follow the dynamic edges of a cancelled task. The
+    two rules are a pair: retraction un-gates the parent, and this keeps
+    what it retracts out of the plan in the first place.
+    """
+    first = await _new_build(client)
+    await client.post(f"/api/v1/builds/{first}/tasks", json=_register("parent"))
+    await _start(client, first, "parent")
+    await _yield_children(client, first, "parent", ["kid1", "kid2"])
+    # The cascade reaches the suspended parent and leaves the pending
+    # children exactly as a real one does.
+    await client.post(f"/api/v1/builds/{first}/cancel", params={"cascade": "true"})
+
+    later = await _new_build(client)
+    await client.post(
+        f"/api/v1/builds/{later}/tasks", json=_register("root", ["parent"])
+    )
+
+    frontier = (await client.get(f"/api/v1/builds/{later}/frontier")).json()
+    admitted = sorted(frontier["status_counts"].items())
+    assert admitted == [("cancelled", 1), ("pending", 1)], (
+        "the fresh build's plan must be its root and the cancelled parent "
+        f"alone — the abandoned generation is not its work: {admitted}"
+    )
+    assert [ref["task_id"] for ref in frontier["actionable"]] == [], (
+        "and nothing of it may be actionable"
+    )
+
+
+@pytest.mark.asyncio
 async def test_a_retracted_edge_does_not_propagate_a_failure(client: AsyncClient):
     """``skip-blocked`` walks down the edges from a failed task. A child of
     an abandoned attempt failing says nothing about a parent that is no
