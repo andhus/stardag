@@ -6,6 +6,83 @@ For detailed SDK migration guides, see [RELEASE_NOTES.md](RELEASE_NOTES.md).
 
 ## [Unreleased]
 
+### SDK
+
+- **Breaking, for anyone implementing `RegistryABC` outside this repo:**
+  `task_cancel_aio` takes a keyword-only `if_executor_ref`, and
+  `build_get_executions` / `build_get_executions_aio` take a keyword-only
+  `cursor`. Subclasses that override the old signatures raise `TypeError`
+  when the reactive tick calls them; the call sites log and continue, so the
+  symptom is a cancel that is never recorded rather than a crash.
+
+- **A cancelled or failing build no longer stops other builds' executions.**
+  The tick's cancel pass read the frontier's `running` list, which is every
+  RUNNING task in the build's _plan_ — and after plan closure that includes
+  tasks another build has claimed and is executing. A cancelled build
+  cancelled them: killing live containers, releasing claims it never held,
+  and doing it again on every tick a neighbour's status write earned it. It
+  now asks the registry which executions it started and has not seen end
+  (`GET /builds/{id}/executions`, `RegistryABC.build_get_executions`) and
+  stops only those. Against a server predating the route it falls back to
+  the frontier filtered on the new `latest_status_build_id`; against one
+  predating that field too, it behaves exactly as before.
+- **`stardag builds cancel --cascade` now actually stops the executions it
+  releases.** The cascade writes TASK_CANCELLED for the claims the build
+  held — which is what lets the next build take those tasks over — but a
+  cascaded task is CANCELLED and therefore in neither `running` nor
+  `actionable`, so the one caller of `cancel_detached` could not see it.
+  The claim was released and the container kept running, and the next
+  claimant started a second execution of the same task. The executions
+  route reports them, so the one tick a cancel asks for now stops them.
+- **A tick that resets a blocked upstream now runs it, instead of lingering
+  for a wake-up it never sent.** Resetting a cancelled blocker is the one
+  thing terminal handling does that changes the frontier, and the pass
+  treated it as no action at all: it fell through to the linger poll, which
+  waits on the registry's wake-up flag — and that flag deliberately skips
+  the build whose own event caused the change, since it is the one that
+  already knows. So the tick waited for news it had already heard, exited on
+  its deadline, and left the build with nothing running, nothing scheduled
+  and no flag to be handed out on, until the watchdog. Reachable whenever a
+  shared task is genuinely left cancelled, which is exactly what the cancel
+  fixes above make the common outcome.
+- **A worker no longer spawns a tick for a build that cannot use one.** A
+  cancelled build's workers keep running until a tick stops them, and each
+  one re-flagged the build on its way out, so every drain in the
+  environment handed it out again. `POST /builds/{id}/notify` now answers
+  `needs_tick` truthfully and the worker skips the spawn when it is false.
+  The one tick a cancel wants is unaffected: the cancel sets that flag
+  itself, and it survives until a tick drains it.
+
+### Registry API
+
+- `POST /builds/{build}/tasks/{task}/cancel` refuses with 409
+  `not_claim_holder` when the task is RUNNING, SUSPENDED or INTERRUPTED
+  under a different build. Authority to revoke is build-scoped — the
+  cascade already enforced it, and `stardag tasks cancel` has documented it
+  since it shipped ("pass the build from `latest_status_build_id`"). PENDING
+  and terminal statuses stay cancellable by any build; they hold no claim.
+- `GET /builds/{build_id}/executions`: the detached executions this build
+  started and has not seen end, with the backend and ref to stop them by.
+  Paged with a keyset `cursor` — stopping an execution records nothing, so
+  the answer does not shrink as a caller works through it, and a bare cap
+  would hand back the same page forever.
+  Answered from the event log rather than from the task rows, because the
+  question is about the past: releasing a claim is what lets the next build
+  take the task over, so by the time a cancelled build ticks, the row may
+  already name somebody else's execution. A ref is not a claim — cancelling
+  the one this build recorded cannot reach another build's container.
+- `FrontierTaskRef.latest_status_build_id`: who holds each task in the
+  frontier, so a scheduler can tell its own executions from a neighbour's.
+- `POST /builds/{id}/notify` flags only a RUNNING build, and reports
+  `needs_tick` accordingly.
+- `POST /builds/{b}/tasks/{t}/cancel?if_executor_ref=…` records nothing
+  unless this build still holds the task in RUNNING or INTERRUPTED **under
+  that execution** — evaluated on the locked row, so an engine cleaning up
+  after itself from a listing it read a moment ago can neither stamp a task
+  another build has since reset and is about to run, nor revoke the claim of
+  an execution it started since and nobody stopped. A no-op rather than an
+  error: losing that race is a normal outcome, not a fault.
+
 ## [0.23.0] — 2026-09-01
 
 ### SDK

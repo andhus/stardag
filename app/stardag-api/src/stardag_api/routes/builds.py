@@ -3,11 +3,11 @@
 import json
 import logging
 from datetime import datetime, timedelta
-from typing import Annotated, Any, Mapping, Sequence
+from typing import Annotated, Any, Mapping, Sequence, cast
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import delete, func, select, update
+from sqlalchemy import delete, func, literal, select, tuple_, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -55,6 +55,8 @@ from stardag_api.schemas import (
     AddDependenciesResponse,
     BuildCancelResponse,
     BuildCreate,
+    BuildExecutionRef,
+    BuildExecutionsResponse,
     BuildFrontierResponse,
     BuildListResponse,
     BuildNotifyResponse,
@@ -93,7 +95,11 @@ from stardag_api.services.build_cleanup import (
     last_activity_at,
     select_cancellable_builds,
 )
-from stardag_api.services.claims import claim_is_live, live_claim_filter
+from stardag_api.services.claims import (
+    claim_is_live,
+    live_claim_filter,
+    may_revoke,
+)
 from stardag_api.services.wakeups import (
     MAX_WAKE_CANDIDATES,
     MAX_LEASE_TTL_SECONDS,
@@ -544,6 +550,7 @@ async def _create_task_event(
     extra_metadata: dict | None = None,
     limit_keys: list[str] | None = None,
     claim: bool = False,
+    if_executor_ref: str | None = None,
 ) -> TaskEventResponse:
     """Create a task event and return slim response.
 
@@ -556,6 +563,10 @@ async def _create_task_event(
     the FOR-UPDATE-locked task row, and the raised HTTPException rolls back
     the whole transaction (no event, no limit-key rows, and any
     limit-row locks taken by the enforce_limits pre-check are released).
+
+    ``if_executor_ref`` (TASK_CANCELLED only): record nothing unless this
+    build still holds the task, in a status with an execution to revoke,
+    under *that* execution. See :func:`cancel_task`.
     """
     # Limit checks
     _raise_if_limit_exceeded(check_rate_limit(auth.workspace_id, limits_settings))
@@ -613,6 +624,63 @@ async def _create_task_event(
                 status_code=409,
                 detail={"error_code": "task_already_completed"},
             )
+
+    if event_type == EventType.TASK_CANCELLED and if_executor_ref is not None:
+        # Evaluated on the FOR-UPDATE-locked row, which is the whole point:
+        # a cleanup pass decides what to cancel from a listing it read a
+        # moment ago, and the row can have moved since in two ways that both
+        # end badly.
+        #
+        # Another build can have reset the task to PENDING and be about to
+        # run it. Writing CANCELLED then takes no claim — PENDING holds none
+        # — but it stamps a neighbour's freshly scheduled task dead and
+        # sends it round the reset loop, which is the class of damage the
+        # caller is cleaning up after.
+        #
+        # Or *this* build can have started the task again under a new ref:
+        # a retry it spawned, or a worker of the old attempt self-reporting
+        # late. Then status and owner still say "held by me", and recording
+        # the cancel would revoke the claim of an execution nobody stopped —
+        # so the identity of the execution has to be part of the condition,
+        # not just who holds the task.
+        #
+        # A no-op rather than a 409: the caller is doing best-effort
+        # cleanup over a list, and "it moved on" is a normal outcome, not an
+        # error to log per task.
+        held = (
+            db_task.latest_status in (TaskStatus.RUNNING, TaskStatus.INTERRUPTED)
+            and db_task.latest_status_build_id == build_id
+            and db_task.latest_executor_ref == if_executor_ref
+        )
+        if not held:
+            status, _, _, _, attempt_count = await get_task_status_in_build(
+                db, build_id, db_task.id
+            )
+            return TaskEventResponse(
+                task_id=db_task.task_id,
+                status=status,
+                latest_status=db_task.latest_status,
+                attempt_count=attempt_count,
+            )
+
+    if event_type == EventType.TASK_CANCELLED and not may_revoke(db_task, build_id):
+        # Authority to revoke is build-scoped. Evaluated on the same
+        # FOR-UPDATE-locked row as the claim above, so the answer cannot go
+        # stale between the check and the event: a caller that held the
+        # claim a moment ago and lost it to an expiry takeover is refused
+        # here rather than silently releasing the new holder's claim.
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error_code": "not_claim_holder",
+                "latest_status": db_task.latest_status,
+                "latest_status_build_id": (
+                    str(db_task.latest_status_build_id)
+                    if db_task.latest_status_build_id
+                    else None
+                ),
+            },
+        )
 
     # Build event_metadata from commit_hash and any extra metadata
     event_metadata: dict | None = None
@@ -1722,7 +1790,21 @@ async def notify_build(
     _raise_if_limit_exceeded(check_rate_limit(auth.workspace_id, limits_settings))
     build = await _get_build_checked(build_id, db, auth)
     now = utc_now()
-    build.needs_tick_at = now
+    # Only a RUNNING build can act on a wake-up, so only a RUNNING build is
+    # flagged here. This is the same restriction ``_flag_builds`` applies to
+    # the transition hook, and its absence here was a live loop: a cancelled
+    # build's workers keep running until a tick stops them, every one of
+    # them notifies on its way out, and each notify re-flagged the build for
+    # the next drain to hand out again — forever, for as long as neighbours
+    # kept touching its tasks.
+    #
+    # A cancelled build still gets its one tick: its own cancel sets the
+    # flag (``flag_build``), which survives here and is reported below, so
+    # the first caller to see it still spawns. Once that tick clears the
+    # flag, later notifies report False and nobody spawns again.
+    if build.latest_status == BuildStatus.RUNNING:
+        build.needs_tick_at = now
+    needs_tick = build.needs_tick_at is not None
     # Stamp the hand-out mark in the SAME transaction as the flag, on the
     # assumption that the caller will spawn: a concurrent
     # ``POST /builds/wake-candidates`` must never see this build flagged
@@ -1730,7 +1812,7 @@ async def notify_build(
     # below says a scheduler is live — so the caller will *not* spawn —
     # the stamp is put back, and the build is exactly as it was.
     previous_stamp = build.tick_requested_at
-    if can_spawn:
+    if can_spawn and needs_tick:
         await mark_tick_requested(db, build, now=now)
     await db.commit()
     # Re-read from the database, not off the ORM instance. The session is
@@ -1741,11 +1823,11 @@ async def notify_build(
     # still held once the flag was already durable".
     await db.refresh(build, ["scheduler_lease_until"])
     scheduler_live = lease_is_live(build)
-    if scheduler_live and can_spawn:
+    if scheduler_live and can_spawn and needs_tick:
         build.tick_requested_at = previous_stamp
         await db.commit()
     return BuildNotifyResponse(
-        build_id=build_id, needs_tick=True, scheduler_live=scheduler_live
+        build_id=build_id, needs_tick=needs_tick, scheduler_live=scheduler_live
     )
 
 
@@ -2258,6 +2340,10 @@ async def get_build_frontier(
             # long with no executor ref"); omitting it silently disabled
             # those guards, since the field defaults to None.
             latest_status_at=t.latest_status_at,
+            # Who holds it. `running` is every RUNNING task in this build's
+            # plan, not every task this build started, so without this a
+            # scheduler cannot tell its own executions from a neighbour's.
+            latest_status_build_id=t.latest_status_build_id,
             # ...and this turns that heuristic into evidence: past the
             # expiry the server itself will hand the task to the next
             # claimant, so a scheduler can stop inferring from elapsed time.
@@ -2282,6 +2368,215 @@ async def get_build_frontier(
         reactive_app_name=build.reactive_app_name,
         reactive_tick_kwargs=build.reactive_tick_kwargs,
     )
+
+
+# Cap on GET /builds/{id}/executions. Generous, because stopping them is
+# the whole point and a truncated answer costs another round-trip.
+_MAX_BUILD_EXECUTIONS = 500
+
+# Events by which a build learns that an execution it started has ended.
+# A *worker* reported one of these, so there is no container left to stop.
+#
+# TASK_CANCELLED is deliberately absent, and that absence is the whole
+# point of this endpoint: a cancel is a request to stop, not evidence that
+# anything stopped. The server cannot stop an execution — it can only
+# record that the claim is gone — so a task this build cancelled is
+# precisely a task whose container it still has to go and kill.
+#
+# TASK_INTERRUPTED is absent for a different reason: the platform ended one
+# attempt and the backend may be retrying under the same call, so the ref
+# can still be live. That is the premise the tick's backend-retry guard
+# already rests on.
+_EXECUTION_ENDED_EVENTS = (
+    EventType.TASK_COMPLETED,
+    EventType.TASK_FAILED,
+    EventType.TASK_SUSPENDED,
+)
+
+
+@router.get("/{build_id}/executions", response_model=BuildExecutionsResponse)
+async def get_build_executions(
+    build_id: UUID,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    auth: Annotated[SdkAuth, Depends(require_sdk_auth)],
+    cursor: Annotated[
+        str | None,
+        Query(
+            description=(
+                "Continue a previous page: pass the ``next_cursor`` it "
+                "returned. Keyset rather than offset, because stopping an "
+                "execution records nothing — the answer does not shrink as "
+                "a caller works through it, and an offset would be stable "
+                "only until a worker reported one over."
+            ),
+        ),
+    ] = None,
+):
+    """The detached executions this build started and never saw end.
+
+    **The server cannot stop anything** — it can only say what is left to
+    stop. Only the engine that spawned an execution can cancel it, and it
+    needs three things: which executions are this build's to revoke, which
+    backend ran them, and the ref to cancel.
+
+    The frontier cannot answer that, and neither can the task rows. Both
+    describe the task's *current* state, and the question here is about the
+    past: what did this build start? Those differ in exactly the case that
+    matters. A cascading build cancel releases the claims this build held —
+    which is the point, it is what lets the next build take those tasks
+    over — and the next build can claim one within seconds, long before the
+    cancelled build's tick gets to run. From that moment the task row names
+    the *new* execution, and the old one, still running, is unreachable:
+    stopping it by task status would either miss it or kill the new one.
+    Both happened.
+
+    So this reads the event log instead, which is where the past is kept.
+    For each task, this build's most recent TASK_STARTED carrying an
+    executor ref — unless this build has since recorded one of
+    :data:`_EXECUTION_ENDED_EVENTS` for it, which means a worker reported
+    the execution over and there is nothing left to kill.
+
+    **An execution ref is not a claim.** The claim says who may run the
+    task next; the ref names one execution, and the build that started it
+    owns it however the claim has moved since. Cancelling that ref cannot
+    touch anybody else's container, which is what makes answering from the
+    past safe rather than reckless.
+
+    Newest first, paged with a keyset ``cursor``. Paging rather than a bare
+    cap, because stopping an execution records nothing — a cancel is a
+    request, not an end, which is the whole point above — so this answer
+    does not shrink as a caller works through it. Asking again without the
+    cursor would return the same page forever and a wide build's tail would
+    never be reached.
+
+    Cancelling is idempotent at every backend stardag supports, so a ref
+    stopped twice — or one whose execution already ended without this build
+    hearing about it — costs nothing.
+    """
+    _raise_if_limit_exceeded(check_rate_limit(auth.workspace_id, limits_settings))
+    build = await _get_build_checked(build_id, db, auth)
+
+    # Every execution-identity field comes off the *start event*, never off
+    # the task's current row. The row describes whoever holds the task now,
+    # and after a takeover that is somebody else's execution — pairing this
+    # build's historical ref with the successor's backend or metadata would
+    # hand back something that identifies no execution at all.
+    ref_column = Event.event_metadata["executor_ref"].as_string()
+    executor_column = Event.event_metadata["executor"].as_string()
+    metadata_column = Event.event_metadata["executor_metadata"]
+    ranked = (
+        select(
+            Event.task_id.label("task_pk"),
+            Event.created_at.label("started_at"),
+            ref_column.label("executor_ref"),
+            executor_column.label("executor"),
+            metadata_column.label("executor_metadata"),
+            Event.id.label("event_id"),
+            # id (UUID7) breaks created_at ties, the same way the status
+            # replay does — without it two same-timestamp starts order by
+            # whatever the index returned, and "the latest ref" becomes a
+            # coin toss between two executions.
+            func.row_number()
+            .over(
+                partition_by=Event.task_id,
+                order_by=(Event.created_at.desc(), Event.id.desc()),
+            )
+            .label("rank"),
+        )
+        .where(
+            Event.build_id == build_id,
+            Event.event_type == EventType.TASK_STARTED,
+            Event.task_id.is_not(None),
+            # A claiming start records no ref — the spawn has not happened
+            # yet — and there is nothing to stop until the one that does.
+            ref_column.is_not(None),
+            # ...and no backend name is an execution nobody can address, so
+            # it is not reported rather than reported half-identified.
+            executor_column.is_not(None),
+        )
+        .subquery()
+    )
+    latest = select(ranked).where(ranked.c.rank == 1).subquery()
+    ended = (
+        select(Event.id)
+        .where(
+            Event.build_id == build_id,
+            Event.task_id == latest.c.task_pk,
+            Event.event_type.in_(_EXECUTION_ENDED_EVENTS),
+            # Same tie-break, for the same reason: an end recorded in the
+            # same microsecond as the start it ends would otherwise be
+            # missed, and the execution reported as still to stop.
+            tuple_(Event.created_at, Event.id)
+            > tuple_(latest.c.started_at, latest.c.event_id),
+        )
+        .exists()
+    )
+    query = (
+        select(
+            Task,
+            latest.c.executor,
+            latest.c.executor_ref,
+            latest.c.executor_metadata,
+            latest.c.started_at,
+            latest.c.event_id,
+        )
+        .join(latest, latest.c.task_pk == Task.id)
+        .where(~ended)
+        # The same total order the cursor walks, and the same tie-break the
+        # ranking above uses.
+        .order_by(latest.c.started_at.desc(), latest.c.event_id.desc())
+        .limit(_MAX_BUILD_EXECUTIONS + 1)
+    )
+    after = _parse_executions_cursor(cursor)
+    if after is not None:
+        after_started_at, after_event_id = after
+        query = query.where(
+            tuple_(latest.c.started_at, latest.c.event_id)
+            < tuple_(literal(after_started_at), literal(after_event_id))
+        )
+    rows = (await db.execute(query)).all()
+
+    truncated = len(rows) > _MAX_BUILD_EXECUTIONS
+    page = rows[:_MAX_BUILD_EXECUTIONS]
+    return BuildExecutionsResponse(
+        build_id=build_id,
+        build_status=build.latest_status,
+        executions=[
+            BuildExecutionRef(
+                task_id=task.task_id,
+                latest_status=task.latest_status,
+                # Narrowed to str by the query's IS NOT NULL filters.
+                executor=cast(str, executor),
+                executor_ref=cast(str, executor_ref),
+                executor_metadata=executor_metadata,
+                latest_status_at=started_at,
+            )
+            for task, executor, executor_ref, executor_metadata, started_at, _ in page
+        ],
+        truncated=truncated,
+        next_cursor=(
+            f"{page[-1][4].isoformat()}|{page[-1][5]}" if truncated and page else None
+        ),
+    )
+
+
+def _parse_executions_cursor(cursor: str | None) -> tuple[datetime, UUID] | None:
+    """Decode a ``next_cursor`` back into the keyset it names.
+
+    A 400 rather than a silent restart from the top: a caller handed page
+    one again would loop over it, which is the failure this paging exists to
+    remove.
+    """
+    if not cursor:
+        return None
+    started_at, _, event_id = cursor.partition("|")
+    try:
+        return datetime.fromisoformat(started_at), UUID(event_id)
+    except ValueError:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Malformed executions cursor: {cursor!r}",
+        ) from None
 
 
 # --- Tasks within Builds ---
@@ -3470,10 +3765,48 @@ async def cancel_task(
     db: Annotated[AsyncSession, Depends(get_db)],
     auth: Annotated[SdkAuth, Depends(require_sdk_auth)],
     commit_hash: str | None = None,
+    if_executor_ref: Annotated[
+        str | None,
+        Query(
+            description=(
+                "Record nothing unless this build still holds the task in "
+                "RUNNING or INTERRUPTED *under this executor reference*. "
+                "For an engine cleaning up after itself from a list it read "
+                "a moment ago: by then another build may have reset the "
+                "task and be about to run it, or this build may have "
+                "started it again under a new reference — and revoking the "
+                "claim of an execution nobody stopped is the same damage in "
+                "a different direction. Answers 200 with the unchanged "
+                "status rather than an error, since losing that race is a "
+                "normal outcome and not a fault."
+            ),
+        ),
+    ] = None,
 ):
-    """Cancel a task within a build (by user, or by the build engine)."""
+    """Cancel a task, releasing its execution claim and limit slots.
+
+    **Only the build that put the task where it is may cancel it.** A task
+    that is RUNNING, SUSPENDED or INTERRUPTED belongs to the build whose
+    event produced that status, and a cancel from anyone else is refused
+    with 409 ``not_claim_holder`` — see
+    :func:`stardag_api.services.claims.may_revoke`. Everything else stays
+    cancellable by any build in the environment: PENDING and the terminal
+    statuses hold no claim.
+
+    Operators reach a stranded claim the same way they always did, by
+    passing the build from ``latest_status_build_id`` (``stardag tasks
+    list`` prints it, and ``stardag tasks cancel`` has documented that
+    argument as the claim holder since it shipped). What the guard removes
+    is a build declaring somebody else's live worker dead.
+    """
     return await _create_task_event(
-        build_id, task_id, EventType.TASK_CANCELLED, db, auth, commit_hash=commit_hash
+        build_id,
+        task_id,
+        EventType.TASK_CANCELLED,
+        db,
+        auth,
+        commit_hash=commit_hash,
+        if_executor_ref=if_executor_ref,
     )
 
 

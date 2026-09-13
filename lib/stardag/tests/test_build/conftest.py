@@ -137,9 +137,11 @@ class RecordingRegistry(NoOpRegistry):
         self._record("task_fail_aio", task.id, error_message=error_message)
         await super().task_fail_aio(build_id, task, error_message)
 
-    async def task_cancel_aio(self, build_id: UUID, task: BaseTask) -> None:
+    async def task_cancel_aio(
+        self, build_id: UUID, task: BaseTask, *, if_executor_ref: str | None = None
+    ) -> None:
         self._record("task_cancel_aio", task.id)
-        await super().task_cancel_aio(build_id, task)
+        await super().task_cancel_aio(build_id, task, if_executor_ref=if_executor_ref)
 
     async def task_skip_aio(self, build_id: UUID, task: BaseTask) -> None:
         self._record("task_skip_aio", task.id)

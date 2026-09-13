@@ -319,6 +319,15 @@ class FrontierTaskRef(BaseModel):
     # staleness bounds (e.g. fail a long-RUNNING task with no executor
     # ref, which would otherwise hold concurrency-limit slots forever).
     latest_status_at: datetime | None = None
+    # The build whose event produced the current status — i.e. who holds
+    # the task in any of the statuses a task can be owned in (RUNNING,
+    # SUSPENDED, INTERRUPTED). Environment-global like the rest of the
+    # latest_* family, and reported so a scheduler can tell its own
+    # executions from a neighbour's: a shared task this build merely
+    # referenced appears in its `running` list, and acting destructively on
+    # one it does not own is somebody else's worker killed. Null when the
+    # owning build row is gone.
+    latest_status_build_id: UUID | None = None
     # When a RUNNING task's execution claim stops being believable. Past
     # it, the server itself lets the next claiming start take the task
     # over, and the task stops counting against its concurrency limits —
@@ -499,6 +508,32 @@ class BuildFrontierResponse(BaseModel):
     # for non-reactive builds (treated as {} when the marker is set but no
     # kwargs were given). Read from the frontier by every tick.
     reactive_tick_kwargs: dict | None = None
+
+
+class BuildExecutionRef(BaseModel):
+    """A detached execution this build is responsible for stopping."""
+
+    task_id: str
+    latest_status: TaskStatus
+    executor: str
+    executor_ref: str
+    executor_metadata: dict | None = None
+    latest_status_at: datetime | None = None
+
+
+class BuildExecutionsResponse(BaseModel):
+    """See GET /builds/{build_id}/executions."""
+
+    build_id: UUID
+    build_status: BuildStatus
+    executions: list[BuildExecutionRef] = []
+    # True when the cap was reached and more exist — ask again with
+    # ``next_cursor``. Stopping an execution records nothing, so this answer
+    # does not shrink as a caller works through it: asking again *without*
+    # the cursor returns the same page forever, and a wide build's tail
+    # would never be reached.
+    truncated: bool = False
+    next_cursor: str | None = None
 
 
 class AddBuildRootsRequest(BaseModel):
@@ -712,6 +747,14 @@ class BuildNotifyResponse(BaseModel):
     """Response of the build notify (scheduler wake-up flag) endpoints."""
 
     build_id: UUID
+    # Whether the build has a pending wake-up, i.e. whether a tick is
+    # wanted. On POST this is normally True — the call just set the flag —
+    # but a build that is no longer RUNNING is not flagged, because it
+    # cannot act on one: a worker of such a build reporting its way out
+    # gets False and skips spawning. The exception is a cancelled build
+    # whose own cancel flagged it and whose tick has not drained it yet;
+    # that flag survives and is reported here, because that one tick is
+    # what stops its executions.
     needs_tick: bool
     # Whether a reactive scheduler held the build's scheduler lease when
     # this response was produced — read *after* the flag is committed, not

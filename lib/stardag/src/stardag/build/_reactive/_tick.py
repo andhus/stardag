@@ -913,6 +913,7 @@ async def _run_tick_body_aio(
                         config=config,
                         summary=summary,
                     )
+                    blockers_reset_before = summary.in_build_blockers_reset
                     terminal = await _handle_terminal(
                         frontier,
                         build_id=build_id,
@@ -927,6 +928,18 @@ async def _run_tick_body_aio(
                         summary.outcome = "terminal"
                         summary.terminal_status = terminal
                         return
+                    if summary.in_build_blockers_reset > blockers_reset_before:
+                        # Resetting a cancelled blocker made a task runnable,
+                        # and this tick is the only thing that knows. The
+                        # registry's wake-up flag deliberately skips the build
+                        # whose own event caused the change — it is the one
+                        # that already knows — so lingering here waits for
+                        # news that cannot arrive, and the build stalls until
+                        # the watchdog with nothing running and nothing to
+                        # report. Counts as having acted, because it is:
+                        # terminal handling is the only phase that changes
+                        # the frontier without going through the action pass.
+                        acted = True
                     if acted:
                         # The tick's own actions (spawns recorded as started,
                         # self-healed completions, recorded failures) changed the

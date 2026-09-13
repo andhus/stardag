@@ -249,6 +249,49 @@ async def test_notify_from_a_caller_that_cannot_spawn_does_not_mark_the_build(
 
 
 @pytest.mark.asyncio
+async def test_notify_does_not_reflag_a_build_that_is_no_longer_running(
+    client: AsyncClient,
+):
+    """The loop this closes. A cancelled build's workers keep running until a
+    tick stops them, each notifies on its way out, and each notify used to
+    re-flag the build — so every drain in the environment handed it out
+    again, ran the cascade again, and the cancelled build never went quiet.
+    Once its one tick has drained the flag, nothing may set it back."""
+    a = await _build(client)
+    await client.post(f"/api/v1/builds/{a}/cancel")
+    await _clear(client, a)  # the one tick ran
+
+    notify = (await client.post(f"/api/v1/builds/{a}/notify")).json()
+    assert notify["needs_tick"] is False
+    assert await _needs_tick(client, a) is False
+    assert await _candidates(client) == []
+
+
+@pytest.mark.asyncio
+async def test_notify_still_reports_a_cancelled_builds_undrained_flag(
+    client: AsyncClient,
+):
+    """The one tick is not lost. A cancel flags the build itself, and a
+    worker notifying before that flag is drained is told a tick is wanted —
+    so the notifier spawns it rather than leaving it to the next drain."""
+    a = await _build(client)
+    await client.post(f"/api/v1/builds/{a}/cancel")
+    notify = (await client.post(f"/api/v1/builds/{a}/notify")).json()
+    assert notify["needs_tick"] is True
+
+
+@pytest.mark.asyncio
+async def test_notify_does_not_flag_a_finished_build(client: AsyncClient):
+    """Same rule, and here there is not even a cascade to run: a late
+    lifecycle report from a straggler worker must not resurrect the build."""
+    a = await _build(client)
+    await client.post(f"/api/v1/builds/{a}/complete")
+    notify = (await client.post(f"/api/v1/builds/{a}/notify")).json()
+    assert notify["needs_tick"] is False
+    assert await _needs_tick(client, a) is False
+
+
+@pytest.mark.asyncio
 async def test_cancelling_a_resident_build_does_not_flag_it(client: AsyncClient):
     a = await _build(client, app=None)
     await client.post(f"/api/v1/builds/{a}/cancel")

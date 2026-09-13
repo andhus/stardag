@@ -88,7 +88,7 @@ class CountingLimitRegistry(NoOpRegistry):
     async def task_fail_aio(self, build_id, task, error_message=None) -> None:
         self.running_keys.pop(str(task.id), None)
 
-    async def task_cancel_aio(self, build_id, task) -> None:
+    async def task_cancel_aio(self, build_id, task, *, if_executor_ref=None) -> None:
         self.running_keys.pop(str(task.id), None)
 
     async def task_suspend_aio(self, build_id, task) -> None:

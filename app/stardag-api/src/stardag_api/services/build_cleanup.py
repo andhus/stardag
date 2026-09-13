@@ -29,37 +29,26 @@ from uuid import UUID
 from sqlalchemy import ColumnElement, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from stardag_api.models import Build, BuildStatus, Event, EventType, Task, TaskStatus
+from stardag_api.models import Build, BuildStatus, Event, EventType, Task
 from stardag_api.models.base import as_utc, utc_now
+from stardag_api.services.claims import BUILD_OWNED_STATUSES
 from stardag_api.services.status import apply_event_to_build, transition_task
 from stardag_api.services.wakeups import flag_build
 
 logger = logging.getLogger(__name__)
 
-# Task statuses a build cancel cascades to. RUNNING holds the execution
-# claim and the concurrency-limit slots — that is the whole point. SUSPENDED
-# is an execution that yielded for dynamic dependencies and was then
-# abandoned; it holds no slot but is equally unschedulable and equally
-# permanent.
+# Task statuses a build cancel cascades to: exactly the statuses a task can
+# be *owned* in, so the cascade and the per-task cancel guard answer
+# ownership from one definition rather than two that can drift. See
+# :data:`stardag_api.services.claims.BUILD_OWNED_STATUSES` for why these
+# three and not PENDING.
 #
-# PENDING is deliberately NOT cascaded, even though it is "non-terminal".
-# A PENDING task holds no claim and blocks nothing another build cannot
-# resolve by simply running it — whereas cancelling it *would* reach across
-# builds: task rows are per environment, and a task this build registered
-# may be referenced by a live build elsewhere (TASK_REFERENCED leaves
-# latest_status_build_id alone, so ownership scoping cannot tell the two
-# apart). Cancelling a build must not fail somebody else's. Use
-# POST /builds/{id}/skip-blocked, or the per-task cancel, for pending work.
-# INTERRUPTED joins these on the same argument the SUSPENDED comment makes:
-# it holds no slot, but it is equally unschedulable by anyone else and
-# equally permanent once its build is gone. Leaving it behind also strands
-# neighbours — a build gated on an interrupted task reads it as "the owner
-# will move it" and waits, where a cancelled one is reset and run.
-CASCADE_CANCEL_STATUSES = (
-    TaskStatus.RUNNING,
-    TaskStatus.SUSPENDED,
-    TaskStatus.INTERRUPTED,
-)
+# What is specific to the cascade: leaving an INTERRUPTED or SUSPENDED task
+# behind strands neighbours — a build gated on one reads it as "the owner
+# will move it" and waits, where a cancelled one is reset and run. And
+# PENDING work whose upstreams failed belongs to
+# POST /builds/{id}/skip-blocked, or to the per-task cancel.
+CASCADE_CANCEL_STATUSES = BUILD_OWNED_STATUSES
 
 
 def last_event_at_subquery() -> ColumnElement[datetime]:

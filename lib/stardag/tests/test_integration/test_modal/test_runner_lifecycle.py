@@ -316,6 +316,33 @@ class TestReactiveWorkerBehavior:
         }
         assert tick_spawn_stub["spawn_kwargs"] == {"build_id": str(build_id)}
 
+    def test_a_build_that_wants_no_tick_does_not_get_one(
+        self,
+        recording_registry,
+        fake_call_id,
+        tick_spawn_stub,
+        default_in_memory_fs_target,
+    ):
+        """A build that is no longer RUNNING is not flagged by the notify,
+        because it cannot act on a wake-up — and this worker spawning for it
+        anyway is the cancelled-build loop: such a build's workers keep
+        running until a tick stops them, and every one of them reports its
+        way out through here."""
+        build_id = uuid4()
+        notified: list[UUID] = []
+        self._notify_returning(
+            recording_registry,
+            BuildNotifyResult(
+                build_id=build_id, needs_tick=False, scheduler_live=False
+            ),
+            notified,
+        )
+
+        Runner()(make_range(limit=3), env_overrides=self._reactive_env(build_id))
+
+        assert notified == [build_id], "the registry is still told"
+        assert tick_spawn_stub == {}, "but no tick is spawned for a dead build"
+
     def test_live_scheduler_sets_the_flag_without_spawning(
         self,
         recording_registry,

@@ -30,6 +30,14 @@ class FrontierTaskRef(StardagBaseModel):
     # When the current status was recorded (None on servers predating the
     # field).
     latest_status_at: datetime | None = None
+    # The build whose event produced the current status. The claim
+    # holder, for any status a task can be held in — and the field that
+    # separates this build's executions from a neighbour's: ``running``
+    # is every RUNNING task in the *plan*, which after plan closure
+    # includes tasks another build is executing. Acting destructively
+    # on one of those kills somebody else's worker. None on servers
+    # predating the field, and on a task whose owning build is gone.
+    latest_status_build_id: UUID | None = None
     # When the RUNNING execution claim stops being honoured, if ever — the
     # one piece of *third-party evaluable* liveness evidence a claim
     # carries: past it the claim is re-claimable and stops occupying
@@ -218,6 +226,47 @@ class BuildFrontier(StardagBaseModel):
     # backstop marker check — the Modal tick reads it from the lighter
     # ``build_get`` before acquiring the lease.
     reactive_tick_kwargs: dict[str, Any] | None = None
+
+
+class BuildExecution(StardagBaseModel):
+    """A detached execution this build started and has not seen end.
+
+    The answer to "what is mine to stop?", which no view of a task's
+    *current* state can give — and the difference is not academic. A
+    cascading cancel releases the claims a build held so the next build can
+    take those tasks over, and the next build can claim one within seconds,
+    before the cancelled build's tick has run. From then on the task row
+    names the new execution and the old one, still running, is unreachable
+    by status: stopping it that way either misses it or kills somebody
+    else's container. Both happened.
+
+    So the registry answers from the event log: the ref this build recorded
+    when it started the task, unless a worker has since reported the
+    execution over. **A ref is not a claim** — the claim says who may run
+    the task next, the ref names one execution, and the build that started
+    it owns it however the claim has moved since.
+    """
+
+    task_id: str
+    latest_status: str
+    executor: str
+    executor_ref: str
+    executor_metadata: dict[str, Any] | None = None
+    latest_status_at: datetime | None = None
+
+
+class BuildExecutions(StardagBaseModel):
+    """Result of ``build_get_executions`` — see :class:`BuildExecution`."""
+
+    build_id: UUID
+    build_status: str
+    executions: list[BuildExecution] = []
+    # The server capped the page; ``next_cursor`` continues it. Stopping an
+    # execution records nothing, so this answer does not shrink as a caller
+    # works through it — asking again without the cursor would return the
+    # same page forever.
+    truncated: bool = False
+    next_cursor: str | None = None
 
 
 class WakeCandidate(StardagBaseModel):
@@ -1035,6 +1084,25 @@ class RegistryABC(metaclass=abc.ABCMeta):
         """Async version of build_get_frontier."""
         return self.build_get_frontier(build_id)
 
+    def build_get_executions(
+        self, build_id: UUID, *, cursor: str | None = None
+    ) -> BuildExecutions:
+        """Detached executions this build must stop (``GET .../executions``).
+
+        Authority to revoke is build-scoped, so an engine tearing a build
+        down has to know which executions are its own. Default: not
+        supported — same shape as the frontier, and for the same reason.
+        """
+        raise NotImplementedError(
+            f"{type(self).__name__} does not support build_get_executions"
+        )
+
+    async def build_get_executions_aio(
+        self, build_id: UUID, *, cursor: str | None = None
+    ) -> BuildExecutions:
+        """Async version of build_get_executions."""
+        return self.build_get_executions(build_id, cursor=cursor)
+
     def build_get(self, build_id: UUID) -> BuildInfo:
         """Return a slim build record (``GET /builds/{id}``).
 
@@ -1479,8 +1547,22 @@ class RegistryABC(metaclass=abc.ABCMeta):
         """Async version of task_resume."""
         self.task_resume(build_id, task)
 
-    async def task_cancel_aio(self, build_id: UUID, task: "BaseTask") -> None:
-        """Async version of task_cancel."""
+    async def task_cancel_aio(
+        self, build_id: UUID, task: "BaseTask", *, if_executor_ref: str | None = None
+    ) -> None:
+        """Async version of task_cancel.
+
+        ``if_executor_ref``: record nothing unless this build still holds
+        the task in a status with an execution to revoke (RUNNING or
+        INTERRUPTED), **under that execution**. For an engine cleaning up
+        after itself from a listing it read a moment ago: by then another
+        build may have reset the task and be about to run it, or this build
+        may have started it again under a new ref — and revoking the claim
+        of an execution nobody stopped is the same damage in the other
+        direction. Backends that cannot evaluate it ignore it; the argument
+        is a narrowing, so ignoring it is the old behaviour.
+        """
+        del if_executor_ref
         self.task_cancel(build_id, task)
 
     async def task_skip_aio(self, build_id: UUID, task: "BaseTask") -> None:

@@ -37,6 +37,7 @@ from stardag.registry._base import (
     SchedulerLeaseResult,
     StartClaimResult,
     BuildCancelResult,
+    BuildExecutions,
     BuildFrontier,
     BuildInfo,
     BuildListPage,
@@ -1901,6 +1902,36 @@ class APIRegistry(RegistryABC):
         )
         return BuildFrontier.model_validate(response.json())
 
+    def build_get_executions(
+        self, build_id: UUID, *, cursor: str | None = None
+    ) -> BuildExecutions:
+        """Detached executions this build must stop."""
+        params = self._get_params()
+        if cursor:
+            params["cursor"] = cursor
+        response = self._request(
+            "GET",
+            f"{self.api_url}/api/v1/builds/{build_id}/executions",
+            params=params,
+            operation=f"Get executions for build {build_id}",
+        )
+        return BuildExecutions.model_validate(response.json())
+
+    async def build_get_executions_aio(
+        self, build_id: UUID, *, cursor: str | None = None
+    ) -> BuildExecutions:
+        """Async version - detached executions this build must stop."""
+        params = self._get_params()
+        if cursor:
+            params["cursor"] = cursor
+        response = await self._arequest(
+            "GET",
+            f"{self.api_url}/api/v1/builds/{build_id}/executions",
+            params=params,
+            operation=f"Get executions for build {build_id}",
+        )
+        return BuildExecutions.model_validate(response.json())
+
     def build_get(self, build_id: UUID) -> BuildInfo:
         """Return a slim build record (lighter than the frontier)."""
         response = self._request(
@@ -2275,16 +2306,25 @@ class APIRegistry(RegistryABC):
             operation=f"Resume task {task.id}",
         )
 
-    async def task_cancel_aio(self, build_id: UUID, task: "BaseTask") -> None:
+    async def task_cancel_aio(
+        self, build_id: UUID, task: "BaseTask", *, if_executor_ref: str | None = None
+    ) -> None:
         """Async version - cancel a task."""
-        await self.task_cancel_by_id_aio(build_id, str(task.id))
+        await self.task_cancel_by_id_aio(
+            build_id, str(task.id), if_executor_ref=if_executor_ref
+        )
 
-    async def task_cancel_by_id_aio(self, build_id: UUID, task_id: str) -> None:
+    async def task_cancel_by_id_aio(
+        self, build_id: UUID, task_id: str, *, if_executor_ref: str | None = None
+    ) -> None:
         """Async version - cancel a task addressed by id."""
+        params = self._get_event_params()
+        if if_executor_ref is not None:
+            params["if_executor_ref"] = if_executor_ref
         await self._arequest(
             "POST",
             f"{self.api_url}/api/v1/builds/{build_id}/tasks/{task_id}/cancel",
-            params=self._get_event_params(),
+            params=params,
             operation=f"Cancel task {task_id}",
         )
 
