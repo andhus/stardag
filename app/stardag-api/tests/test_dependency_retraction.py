@@ -365,6 +365,55 @@ async def test_a_statically_declared_edge_outranks_an_earlier_yield(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("outcome", ["fail", "skip", "interrupt"])
+async def test_every_retryable_parent_keeps_its_generation_out(
+    client: AsyncClient, outcome: str
+):
+    """Not just CANCELLED. A trigger resets the whole retryable set, and it
+    does so *after* registration has closed the plan — so for any of these a
+    stale generation would already be in the plan, PENDING and actionable,
+    by the time the reset retracted its edges."""
+    first = await _new_build(client)
+    await client.post(f"/api/v1/builds/{first}/tasks", json=_register("parent"))
+    await _start(client, first, "parent")
+    await _yield_children(client, first, "parent", ["kid1", "kid2"])
+    await _start(client, first, "parent")
+    await client.post(f"/api/v1/builds/{first}/tasks/parent/{outcome}")
+
+    later = await _new_build(client)
+    await client.post(
+        f"/api/v1/builds/{later}/tasks", json=_register("root", ["parent"])
+    )
+
+    counts = (await client.get(f"/api/v1/builds/{later}/frontier")).json()[
+        "status_counts"
+    ]
+    assert sum(counts.values()) == 2, (
+        f"the abandoned generation entered the plan of a {outcome}ed parent: {counts}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_suspension_whose_owner_is_gone_admits_nothing(client: AsyncClient):
+    """A deleted owning build leaves ``latest_status_build_id`` NULL, and
+    the same reasoning applies: nobody is progressing it."""
+    first = await _new_build(client)
+    await client.post(f"/api/v1/builds/{first}/tasks", json=_register("parent"))
+    await _start(client, first, "parent")
+    await _yield_children(client, first, "parent", ["kid"])
+    await client.post(f"/api/v1/builds/{first}/cancel")
+
+    later = await _new_build(client)
+    await client.post(
+        f"/api/v1/builds/{later}/tasks", json=_register("root", ["parent"])
+    )
+    counts = (await client.get(f"/api/v1/builds/{later}/frontier")).json()[
+        "status_counts"
+    ]
+    assert sum(counts.values()) == 2, counts
+
+
+@pytest.mark.asyncio
 async def test_an_abandoned_suspension_admits_nothing_either(client: AsyncClient):
     """The same trap one status over. A suspension is the one state where a
     task is legitimately mid-flight, so closure keeps admitting its children

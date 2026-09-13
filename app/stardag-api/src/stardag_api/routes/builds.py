@@ -122,6 +122,7 @@ from stardag_api.services.wakeups import (
     select_wake_candidates,
 )
 from stardag_api.services.status import (
+    _RETRYABLE_STATUSES,
     apply_event_to_build,
     transition_task,
     get_all_task_global_statuses,
@@ -2619,32 +2620,38 @@ def _not_abandoned_dynamic_edge(downstream: Any, owner: Any) -> ColumnElement[bo
     by the next build, because its children never reached RUNNING before
     the cancel and so were never cancelled with it.
 
-    Two statuses say the attempt is over, and they need different evidence:
+    "Abandoned" is every status a trigger will reset (``_RETRYABLE_STATUSES``),
+    because that reset is what re-runs the task from the top — and the
+    ordering is what makes this necessary rather than tidy. Registration
+    closes the plan *before* discovery's ``retry_failed`` resets anything,
+    so by the time the edges are retracted their children are already in the
+    plan, PENDING and actionable, and the build runs them. Narrowing this to
+    CANCELLED alone would have left the identical bug under FAILED, SKIPPED
+    and INTERRUPTED, which are equally retryable.
 
-    * **CANCELLED** on its own. Nobody is progressing a cancelled task, and
-      a tick's remedy for one in its plan is to reset it.
-    * **SUSPENDED with no live owner.** A suspension is the one state where
-      the task is legitimately mid-flight — its children *are* being
-      progressed, by the build that yielded them — which is exactly the
-      case this closure was written for (scenario S2), so it must keep
-      admitting them while that build is alive. Once the owner is gone the
-      suspension is abandoned like any other attempt, and the next build's
-      trigger resets it before its first tick.
+    The one exception is **SUSPENDED under a live owner**, and it is the
+    case this closure was written for (scenario S2). A suspension is the
+    single state where a task is legitimately mid-flight: its children *are*
+    being progressed, by the build that yielded them, and a build that did
+    not inherit them would be gated on tasks it cannot schedule and nothing
+    can clear — a permanent deadlock. Once that owner is gone, the
+    suspension is an abandoned attempt like any other.
 
-    Every other status keeps today's over-approximation. RUNNING is being
-    executed; FAILED and SKIPPED are results a tick will not reset, so a
-    build gated behind one should see it named rather than silently
-    ungated; PENDING covers edges recorded before retraction existed, which
-    nothing will ever retract.
+    RUNNING and COMPLETED keep today's over-approximation: neither is
+    retryable, so no reset is coming and nothing will retract those edges.
 
     Static edges are unaffected throughout: an abandoned upstream a build
     statically requires is still a dependency it has to satisfy, and
     resetting it is how it does that.
     """
-    owner_is_live = owner.latest_status == BuildStatus.RUNNING
-    return (TaskDependency.is_dynamic.is_(False)) | (
-        (downstream.latest_status != TaskStatus.CANCELLED)
-        & ((downstream.latest_status != TaskStatus.SUSPENDED) | owner_is_live)
+    abandoned = downstream.latest_status.in_(_RETRYABLE_STATUSES)
+    progressed_by_a_live_owner = (downstream.latest_status == TaskStatus.SUSPENDED) & (
+        owner.latest_status == BuildStatus.RUNNING
+    )
+    return (
+        (TaskDependency.is_dynamic.is_(False))
+        | (~abandoned)
+        | progressed_by_a_live_owner
     )
 
 
@@ -2845,13 +2852,21 @@ async def _reconcile_dependency_edges(
          Required because ON CONFLICT DO NOTHING + RETURNING only returns
          our own inserted rows; a concurrent caller may have created the
          row first and we still need its PK.
-      4. INSERT ... VALUES (...) ON CONFLICT DO NOTHING — bulk edge insert.
+      4. INSERT ... VALUES (...) ON CONFLICT DO UPDATE — bulk edge upsert.
 
-    Idempotent: ``ON CONFLICT DO NOTHING`` handles concurrent registrations.
-    An edge's ``is_dynamic`` value is set from the *first* successful insert;
-    a later call with a different ``is_dynamic`` value does not overwrite the
-    existing row. That's intentional — if a dep is both static and yielded
-    dynamically (unusual) we record the first observation as authoritative.
+    Idempotent under concurrent registrations, and an upsert rather than a
+    plain insert because a conflicting row may need two things changed —
+    see the comment on the statement itself:
+
+    * a **superseded** edge is revived, because re-asserting an edge is what
+      makes it current again, and the common case after a retraction is the
+      next attempt yielding the very same children;
+    * a **static** declaration demotes a row first seen as a yield, since
+      ``is_dynamic`` now decides what retraction may touch and a declaration
+      is the stronger of the two claims. A dynamic write never flips it back.
+
+    That reverses the original "the first observation is authoritative",
+    deliberately — see ``TaskDependency.is_dynamic``.
 
     Returns the number of edges inserted by this call. On Postgres the
     asyncpg cursor reports an accurate rowcount; on dialects that don't
@@ -2971,10 +2986,11 @@ async def _reconcile_dependency_edges(
     )
     result = await db.execute(edge_stmt)
     # CursorResult.rowcount totals across all VALUES rows on Postgres
-    # (with asyncpg, this is reliable even for ON CONFLICT DO NOTHING —
-    # only actually-inserted rows are counted). On dialects that don't
-    # expose rowcount we report 0 rather than len(edge_rows), since
-    # len(edge_rows) would over-claim whenever any conflict occurred.
+    # (with asyncpg this is reliable for the upsert too — it counts rows
+    # actually inserted or updated, and the WHERE clause keeps a no-op
+    # conflict from counting). On dialects that don't expose rowcount we
+    # report 0 rather than len(edge_rows), since len(edge_rows) would
+    # over-claim whenever any conflict occurred.
     inserted = getattr(result, "rowcount", None)
     if inserted is None or inserted < 0:
         inserted = 0
@@ -3846,8 +3862,13 @@ async def add_task_dependencies(
     this endpoint.
 
     Creates phantom upstream tasks for unknown ``upstream_task_ids`` and
-    inserts edges idempotently (``ON CONFLICT DO NOTHING``). The first write
-    of a given edge sets ``is_dynamic``; subsequent writes do not overwrite.
+    inserts edges idempotently. A conflicting row is **revived** if it had
+    been superseded — re-yielding an upstream is what makes the edge current
+    again, and after a retraction the next attempt usually yields the very
+    same children. A dynamic write never changes ``is_dynamic``; a static
+    registration does, demoting a row first seen as a yield, because a
+    declaration outranks an observation and the flag now decides what
+    retraction may touch (see ``TaskDependency.is_dynamic``).
 
     Returns:
         ``{"added": <edges that became current>, "total": <upstream_task_ids

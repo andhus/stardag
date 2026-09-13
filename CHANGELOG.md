@@ -76,6 +76,13 @@ For detailed SDK migration guides, see [RELEASE_NOTES.md](RELEASE_NOTES.md).
   A static declaration also outranks an earlier dynamic observation now —
   `is_dynamic` decides what retraction may touch, so it has to mean "nothing
   has declared this".
+  Plan closure stops following the dynamic edges of a task a trigger will
+  reset — the whole retryable set, not only cancelled ones — because
+  registration closes the plan _before_ `retry_failed` resets anything, so a
+  stale generation would already be in the plan and actionable by the time
+  its edges were retracted. The exception is a suspension under a live
+  owner: there the children really are being progressed, and a build that
+  did not inherit them would deadlock.
 - Gating, plan closure, `skip-blocked` and `blocked_by_external` ignore
   retracted edges. The DAG view does not — that attempt really did need
   those tasks, and the graph is history.

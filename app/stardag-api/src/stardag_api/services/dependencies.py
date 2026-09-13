@@ -125,9 +125,16 @@ def _begins_new_attempt(
             and previous_status != TaskStatus.PENDING
         )
     if event.event_type == EventType.TASK_STARTED:
+        # A NULL previous owner counts as a takeover, not as "mine". The
+        # column is ``ON DELETE SET NULL``, so a suspension whose build has
+        # been deleted lands here, as does a row predating the owner
+        # backfill — and in both cases whoever is starting it now is not the
+        # build that suspended it. Plan closure already reads a missing
+        # owner as abandoned; treating it as present here would keep an
+        # abandoned generation current while the other half of the rule
+        # assumes it is gone.
         return (
             previous_status == TaskStatus.SUSPENDED
-            and previous_status_build_id is not None
             and previous_status_build_id != event.build_id
         )
     return False

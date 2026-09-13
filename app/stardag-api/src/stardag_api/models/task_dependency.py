@@ -77,10 +77,17 @@ class TaskDependency(Base, TimestampMixin):
 
     # True when this edge was added at runtime because the downstream task
     # yielded the upstream as a dynamic dep. False for edges coming from a
-    # task's static ``requires()`` at registration time. An edge that exists
-    # as both static and dynamic (unusual but possible) is stored once with
-    # the FIRST observation; we don't flip from False -> True on later writes
-    # because the initial registration is authoritative.
+    # task's static ``requires()`` at registration time.
+    #
+    # **A static declaration outranks an earlier dynamic observation**, so an
+    # edge that exists as both is stored as static — a later registration
+    # naming it in ``requires()`` flips True -> False, while a yield never
+    # flips it back. That reverses the original "first observation wins",
+    # and deliberately: the flag used to be read by nothing but the DAG view,
+    # and now decides what ``superseded_at`` may retract. Left as it was, an
+    # edge first seen as a yield would be retracted out from under the build
+    # that statically requires it — an upstream ungated from a downstream
+    # that declares it.
     is_dynamic: Mapped[bool] = mapped_column(
         Boolean,
         nullable=False,
