@@ -2637,6 +2637,18 @@ def _not_abandoned_dynamic_edge(downstream: Any, owner: Any) -> ColumnElement[bo
     can clear — a permanent deadlock. Once that owner is gone, the
     suspension is an abandoned attempt like any other.
 
+    **Known residue, one registration path.** The exception protects the two
+    paths that register without resetting anything — a resident build, and a
+    worker recording the deps it just yielded. A *reactive trigger* is the
+    third, and it resets the whole retryable set immediately after each
+    registration chunk (only ``run_reactive_bootstrap`` passes
+    ``retry_failed=True``). So there the parent is reset a moment after this
+    admits its children, which retracts their edges and leaves them in the
+    plan as orphans the build may still run. Closing that needs the reset to
+    happen *before* closure — a change to the registration contract, not to
+    this predicate — and the plan-membership half of it needs a way to
+    un-admit a task, which the append-only event log has no notion of.
+
     RUNNING and COMPLETED keep today's over-approximation: neither is
     retryable, so no reset is coming and nothing will retract those edges.
 
